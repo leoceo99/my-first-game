@@ -141,3 +141,106 @@ export function highlight(src) {
   }
   return html + escapeHtml(src.slice(pos));
 }
+
+// ---------- C ----------
+const C_KEYWORDS = new Set([
+  "auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum",
+  "extern", "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return",
+  "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void",
+  "volatile", "while", "_Bool", "bool", "size_t",
+]);
+const C_TYPES = new Set(["char", "double", "float", "int", "long", "short", "void", "unsigned", "signed", "bool", "_Bool", "size_t"]);
+const C_BUILTINS = new Set([
+  "printf", "scanf", "puts", "putchar", "getchar", "fgets", "sprintf", "fflush", "malloc", "calloc", "free",
+  "rand", "srand", "time", "exit", "abs", "atoi", "atof", "strlen", "strcpy", "strncpy", "strcat", "strcmp",
+  "strncmp", "strchr", "strstr", "memset", "sqrt", "pow", "fabs", "floor", "ceil", "round", "sin", "cos",
+  "tan", "log", "log10", "exp", "fmod", "toupper", "tolower", "isdigit", "isalpha", "isspace", "isupper",
+  "islower", "isalnum", "NULL", "true", "false", "stdin", "stdout", "EOF", "main",
+]);
+
+export function tokenizeC(src) {
+  const tokens = [];
+  const n = src.length;
+  let i = 0;
+  let lineStart = true;
+  let prevWord = "";
+  while (i < n) {
+    const c = src[i];
+    if (c === "\n") { i++; lineStart = true; continue; }
+    if (c === " " || c === "\t" || c === "\r") { i++; continue; }
+    if (c === "/" && src[i + 1] === "/") {
+      let end = src.indexOf("\n", i);
+      if (end < 0) end = n;
+      tokens.push({ type: "comment", start: i, end });
+      i = end;
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "*") {
+      let end = src.indexOf("*/", i + 2);
+      end = end < 0 ? n : end + 2;
+      tokens.push({ type: "comment", start: i, end });
+      i = end;
+      continue;
+    }
+    if (c === "#" && lineStart) {
+      let end = src.indexOf("\n", i);
+      if (end < 0) end = n;
+      const text = src.slice(i, end);
+      const m = text.match(/^#\s*include\s*/);
+      if (m) {
+        tokens.push({ type: "decorator", start: i, end: i + m[0].length });
+        tokens.push({ type: "string", start: i + m[0].length, end });
+      } else {
+        tokens.push({ type: "decorator", start: i, end });
+      }
+      i = end;
+      continue;
+    }
+    lineStart = false;
+    if (c === '"' || c === "'") {
+      const end = scanString(src, i);
+      tokens.push({ type: "string", start: i, end });
+      i = end;
+      prevWord = "";
+      continue;
+    }
+    if (IDENT_START.test(c)) {
+      let j = i + 1;
+      while (j < n && IDENT_CHAR.test(src[j])) j++;
+      const w = src.slice(i, j);
+      let k = j;
+      while (k < n && (src[k] === " " || src[k] === "\t")) k++;
+      if (C_KEYWORDS.has(w)) tokens.push({ type: "keyword", start: i, end: j });
+      else if (C_BUILTINS.has(w)) tokens.push({ type: "builtin", start: i, end: j });
+      else if (src[k] === "(" && (C_TYPES.has(prevWord) || prevWord === "*")) tokens.push({ type: "definition", start: i, end: j });
+      prevWord = w;
+      i = j;
+      continue;
+    }
+    if ((c >= "0" && c <= "9") || (c === "." && src[i + 1] >= "0" && src[i + 1] <= "9")) {
+      const m = src.slice(i).match(/^(?:0[xX][0-9a-fA-F]+|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)[uUlLfF]*/);
+      const end = i + (m ? m[0].length : 1);
+      tokens.push({ type: "number", start: i, end });
+      i = end;
+      prevWord = "";
+      continue;
+    }
+    if (c !== "*") prevWord = "";
+    else if (C_TYPES.has(prevWord) || prevWord === "*") prevWord = "*";
+    i++;
+  }
+  return tokens;
+}
+
+/** 언어에 맞게 코드를 색칠된 HTML로 바꿔요. */
+export function highlightFor(lang, src) {
+  if (lang !== "c") return highlight(src);
+  let html = "";
+  let pos = 0;
+  for (const t of tokenizeC(src)) {
+    if (t.start > pos) html += escapeHtml(src.slice(pos, t.start));
+    html += `<span class="tok-${t.type}">${escapeHtml(src.slice(t.start, t.end))}</span>`;
+    pos = t.end;
+  }
+  return html + escapeHtml(src.slice(pos));
+}

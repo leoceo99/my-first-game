@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>파이브릿지</title>
-  <meta name="description" content="아이패드에서 바로 쓰는 파이썬 코딩 앱">
+  <meta name="description" content="아이패드에서 바로 쓰는 파이썬·C 코딩 앱">
   <meta name="theme-color" content="#2b5b84">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
@@ -30,6 +30,7 @@
         <span class="brand-name">파이브릿지</span>
       </div>
       <button class="file-name" id="btn-rename" type="button" aria-label="코드 이름 바꾸기">
+        <span class="lang-badge" id="lang-badge" data-lang="python">Python</span>
         <span id="file-name-text">첫 만남</span>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>
       </button>
@@ -65,7 +66,7 @@
             <p class="welcome-title">실행 결과가 여기에 나와요</p>
             <ul>
               <li>오른쪽 위 <b>실행</b>을 누르거나 키보드에서 <kbd>⌘</kbd><kbd>Enter</kbd></li>
-              <li><code>input()</code>이 나오면 아래 칸에 답을 적어서 보내요</li>
+              <li><code>input()</code>이나 <code>scanf()</code>가 나오면 아래 칸에 답을 적어서 보내요</li>
               <li>오류가 나면 무엇이 잘못됐는지 한국어로 알려 줘요</li>
             </ul>
           </div>
@@ -92,9 +93,10 @@
         </button>
       </div>
       <div class="drawer-actions">
-        <button class="btn btn-primary" id="btn-new" type="button">새 코드</button>
+        <button class="btn btn-primary" id="btn-new-python" type="button">새 파이썬 코드</button>
+        <button class="btn btn-primary btn-c" id="btn-new-c" type="button">새 C 코드</button>
         <label class="btn btn-ghost" for="file-import">파일 가져오기</label>
-        <input type="file" id="file-import" accept=".py,.txt,text/x-python,text/plain" hidden>
+        <input type="file" id="file-import" accept=".py,.c,.h,.txt,text/x-python,text/x-csrc,text/plain" hidden>
       </div>
       <ul class="file-list" id="file-list"></ul>
       <h3 class="drawer-sub">예제로 시작하기</h3>
@@ -103,7 +105,7 @@
         <p class="drawer-foot-title">지금 열린 코드</p>
         <div class="drawer-foot-row">
           <button class="btn btn-ghost" id="btn-copy" type="button">코드 복사</button>
-          <button class="btn btn-ghost" id="btn-export" type="button">.py 파일로 저장</button>
+          <button class="btn btn-ghost" id="btn-export" type="button">파일로 저장</button>
           <button class="btn btn-ghost btn-danger" id="btn-delete" type="button">삭제</button>
         </div>
       </div>

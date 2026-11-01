@@ -2,15 +2,31 @@
 
 Action에서 사용할 게임 만들기
 
-## 파이브릿지 — 아이패드에서 쓰는 파이썬 앱
+## 파이브릿지 — 아이패드에서 쓰는 파이썬 · C 앱
 
-설치 없이 **아이패드 Safari에서 바로** 파이썬을 쓰고 실행하는 앱이에요.
+설치 없이 **아이패드 Safari에서 바로** 파이썬과 C를 쓰고 실행하는 앱이에요.
 파이썬은 아이패드 안에서 직접 돌아가요 ([Pyodide](https://pyodide.org) 사용).
 나중에는 이름처럼 **파이썬 → C++ 변환**까지 이어 주는 다리가 될 예정이에요.
 
 | 가로 화면 | 친절한 오류 안내 |
 |---|---|
 | ![가로 화면](screenshots/landscape.png) | ![오류 안내](screenshots/error.png) |
+
+### C 실행기 (직접 만든 것)
+
+C는 외부 컴파일러 없이, 이 저장소에서 직접 만든 C 실행기(`docs/js/c/`)로 돌아가요.
+코드를 토큰 → 구문 트리(AST) → 검사 → 실행 순서로 처리하고, 이 구문 트리는 나중에
+**언어 사이 변환**(C ↔ 파이썬 등)의 바탕이 돼요.
+
+- 지원: `int` `double` `char` `long` 등 기본 타입, 배열(2차원, 가변 길이), 포인터, 함수와 재귀,
+  `if` `for` `while` `do` `switch`, `#include` `#define`(매크로 함수 포함),
+  `printf` `scanf` `getchar` `fgets` `puts`, `string.h` `math.h` `ctype.h` `stdlib.h`(`rand` `malloc` `free`) `time.h`
+- 아직 안 됨: `struct` `enum` `typedef`, 함수 포인터, 파일 입출력
+- 진짜 C는 그냥 넘어가지만 배우는 사람에게 중요한 실수를 한국어로 잡아 줘요:
+  값을 넣지 않은 변수 사용, 배열 범위 벗어남, `scanf`의 `&` 빠뜨림, `%d`/`%f` 형식 불일치,
+  `if (x = 5)`, 문자열을 `==`로 비교, 0으로 나누기, 끝없는 재귀, NULL 포인터
+
+![C 오류 안내](screenshots/c-error.png)
 
 ### 이 앱만의 특징
 
@@ -46,6 +62,8 @@ Action에서 사용할 게임 만들기
 | `docs/js/engine.js` | 파이썬 엔진 켜기/실행/입력/멈춤 |
 | `docs/worker.js` | 화면과 따로 파이썬을 돌리는 Web Worker |
 | `docs/py/runner.py` | 엔진 안에서 사용자 코드를 실행하는 파이썬 코드 |
+| `docs/js/c/` | 직접 만든 C 실행기 (lexer, parser, compile, runtime) |
+| `docs/c-worker.js` | 화면과 따로 C를 돌리는 Web Worker |
 | `docs/sw.js` | 한 번 열면 인터넷 없이도 쓸 수 있게 파일을 저장하는 서비스 워커 |
 
 `input()`은 "다시 실행" 방식으로 처리해요. 답이 필요하면 실행을 멈추고 질문을 보여 주고,
@@ -58,6 +76,7 @@ Action에서 사용할 게임 만들기
 ```bash
 python3 -m unittest discover -s tests       # 파이썬 실행기 (runner.py)
 node --test tests/highlight.test.mjs        # 문법 색칠, 오류 설명
+node --test tests/c.test.mjs                # C 실행기
 
 # 실제 브라우저 테스트 (Playwright + Chromium 필요)
 mkdir -p docs/vendor/pyodide && cd /tmp && npm pack pyodide@314.0.7 && tar xzf pyodide-314.0.7.tgz \

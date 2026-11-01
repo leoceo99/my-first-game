@@ -3,7 +3,7 @@
 // 글자 입력은 브라우저 기본 <textarea>가 맡고(그래서 한글 입력, 복사/붙여넣기,
 // 되돌리기가 아이패드 그대로 동작해요), 그 뒤에 색칠된 코드를 겹쳐 보여줘요.
 
-import { highlight } from "./highlight.js";
+import { highlightFor } from "./highlight.js";
 
 const INDENT = "    ";
 // 아이패드의 '스마트 구두점'이 바꾼 글자를 파이썬이 이해하는 글자로 되돌려요.
@@ -17,6 +17,7 @@ export class CodeEditor {
     this.composing = false;
     this.lineCount = 0;
     this.errorLine = null;
+    this.lang = "python";
     root.classList.add("ed");
     root.innerHTML = `
       <div class="ed-gutter" aria-hidden="true"><div class="ed-gutter-inner"><div class="ed-gutter-mark" hidden></div><pre class="ed-lines"></pre></div></div>
@@ -60,11 +61,18 @@ export class CodeEditor {
     this.ta.focus({ preventScroll: true });
   }
 
+  /** 언어를 바꿔요 ("python" 또는 "c"). 색칠, 자동 들여쓰기, 주석 기호가 바뀌어요. */
+  setLanguage(lang) {
+    this.lang = lang;
+    this.ta.setAttribute("aria-label", lang === "c" ? "C 코드" : "파이썬 코드");
+    this.render();
+  }
+
   // ---------- 그리기 ----------
   render() {
     const code = this.ta.value;
     // 마지막 줄이 비어 있어도 높이가 맞도록 줄바꿈을 하나 더 붙여요.
-    this.hl.innerHTML = highlight(code) + "\n";
+    this.hl.innerHTML = highlightFor(this.lang, code) + "\n";
     const count = code.split("\n").length;
     if (count !== this.lineCount) {
       this.lineCount = count;
@@ -154,7 +162,23 @@ export class CodeEditor {
       this.newline();
     } else if (e.key === "Backspace" && !mod && !e.altKey) {
       if (this.smartBackspace()) e.preventDefault();
+    } else if (e.key === "}" && this.lang === "c" && !mod) {
+      if (this.closeBrace()) e.preventDefault();
     }
+  }
+
+  /** C: 빈 줄에서 } 를 치면 한 단계 내어 써요. */
+  closeBrace() {
+    const ta = this.ta;
+    if (ta.selectionStart !== ta.selectionEnd) return false;
+    const s = ta.selectionStart;
+    const lineStart = ta.value.lastIndexOf("\n", s - 1) + 1;
+    const before = ta.value.slice(lineStart, s);
+    if (!before || /[^ ]/.test(before)) return false;
+    const keep = Math.max(0, before.length - INDENT.length);
+    ta.setSelectionRange(lineStart, s);
+    this.insertText(" ".repeat(keep) + "}");
+    return true;
   }
 
   /** 커서 위치에 글자를 넣어요. 아이패드의 되돌리기 기록도 함께 남아요. */
@@ -219,6 +243,20 @@ export class CodeEditor {
     const before = v.slice(lineStart, s);
     let indent = before.match(/^[ \t]*/)[0];
     const trimmed = before.trimEnd();
+    if (this.lang === "c") {
+      if (trimmed.endsWith("{")) {
+        // { 와 } 사이에서 엔터를 치면 } 를 다음 줄로 내리고 가운데 줄로 들어가요.
+        if (v[s] === "}") {
+          this.insertText("\n" + indent + INDENT + "\n" + indent);
+          const caret = s + 1 + indent.length + INDENT.length;
+          ta.setSelectionRange(caret, caret);
+          return;
+        }
+        indent += INDENT;
+      }
+      this.insertText("\n" + indent);
+      return;
+    }
     if (trimmed.endsWith(":")) indent += INDENT;
     else if (/^\s*(return|pass|break|continue|raise)\b/.test(trimmed)) {
       indent = indent.slice(0, Math.max(0, indent.length - INDENT.length));
@@ -276,13 +314,15 @@ export class CodeEditor {
     const [start, end] = this.selectedLines();
     const lines = this.ta.value.slice(start, end).split("\n");
     const filled = lines.filter((l) => l.trim());
-    const uncomment = filled.length > 0 && filled.every((l) => l.trimStart().startsWith("#"));
+    const mark = this.lang === "c" ? "//" : "#";
+    const uncomment = filled.length > 0 && filled.every((l) => l.trimStart().startsWith(mark));
+    const strip = new RegExp(`^${mark} ?`);
     this.replaceLines((line) => {
       if (!line.trim()) return line;
       const pad = line.match(/^\s*/)[0];
       const rest = line.slice(pad.length);
-      if (uncomment) return pad + rest.replace(/^# ?/, "");
-      return pad + "# " + rest;
+      if (uncomment) return pad + rest.replace(strip, "");
+      return `${pad}${mark} ${rest}`;
     });
   }
 

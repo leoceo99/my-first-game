@@ -10,6 +10,15 @@ const $ = (selector) => document.querySelector(selector);
 const app = $("#app");
 const store = new Store(EXAMPLES[0]);
 
+const LANGS = {
+  python: { name: "Python", ext: "py", mime: "text/x-python", engine: "파이썬", newCode: "" },
+  c: {
+    name: "C", ext: "c", mime: "text/x-csrc", engine: "C",
+    newCode: "#include <stdio.h>\n\nint main(void) {\n    \n    return 0;\n}\n",
+  },
+};
+const langOf = () => store.current().lang;
+
 function el(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -88,18 +97,41 @@ function applyFontSize(size) {
   if (editor.errorLine) editor.markError(editor.errorLine);
 }
 
+let shownLang = null;
 function openFile(file) {
+  for (const e of Object.values(engines)) if (e.busy) { e.stop(); }
+  editor.setLanguage(file.lang);
   editor.value = file.code;
   $("#file-name-text").textContent = file.name;
+  $("#lang-badge").textContent = LANGS[file.lang].name;
+  $("#lang-badge").dataset.lang = file.lang;
   document.title = `${file.name} · 파이브릿지`;
-  if (engine.busy) stopCode();
   resetOutput(true);
   $("#answer-form").hidden = true;
+  if (shownLang !== file.lang) {
+    shownLang = file.lang;
+    renderKeybar();
+  }
+  const e = cur();
+  if (e.state === "off") e.start();
+  else updateChip(e);
   renderFileList();
 }
 
 // ---------- 기호 키 바 ----------
-const SYMBOL_KEYS = [
+const TOOL_KEYS = [
+  { label: "←", title: "왼쪽으로", kind: "tool", run: () => editor.moveCaret(-1) },
+  { label: "→", title: "오른쪽으로", kind: "tool", run: () => editor.moveCaret(1) },
+  { label: "↶", title: "되돌리기", kind: "tool", run: () => editor.undo() },
+  { label: "↷", title: "다시 하기", kind: "tool", run: () => editor.redo() },
+];
+const INDENT_KEYS = [
+  { label: "⇥", title: "들여쓰기", kind: "tool", run: () => editor.indent() },
+  { label: "⇤", title: "내어쓰기", kind: "tool", run: () => editor.outdent() },
+];
+const text = (label, insert = label) => ({ label, run: () => editor.insertText(insert) });
+
+const PY_SYMBOL_KEYS = [
   { label: "⇥", title: "들여쓰기", kind: "tool", run: () => editor.indent() },
   { label: "⇤", title: "내어쓰기", kind: "tool", run: () => editor.outdent() },
   { label: ":" },
@@ -113,25 +145,55 @@ const SYMBOL_KEYS = [
   { label: "%" }, { label: "<" }, { label: ">" }, { label: "," }, { label: "." }, { label: "_" },
   { label: "#" },
   { gap: true },
-  { label: "←", title: "왼쪽으로", kind: "tool", run: () => editor.moveCaret(-1) },
-  { label: "→", title: "오른쪽으로", kind: "tool", run: () => editor.moveCaret(1) },
-  { label: "↶", title: "되돌리기", kind: "tool", run: () => editor.undo() },
-  { label: "↷", title: "다시 하기", kind: "tool", run: () => editor.redo() },
+  ...TOOL_KEYS,
 ];
 
 const fn = (name) => ({ label: `${name}()`, kind: "fn", run: () => editor.insertPair(`${name}(`, ")") });
 const word = (text, insert = `${text} `) => ({ label: text, kind: "word", run: () => editor.insertText(insert) });
-const WORD_KEYS = [
+const PY_WORD_KEYS = [
   fn("print"), fn("input"), fn("int"), fn("range"), fn("len"), fn("str"),
   { gap: true },
   word("if"), word("elif"), word("else", "else:"), word("for"), word("in"), word("while"),
   word("def"), word("return"), word("break", "break"), word("import"),
   word("True", "True"), word("False", "False"), word("and"), word("or"), word("not"),
   { gap: true },
-  { label: "⇥", title: "들여쓰기", kind: "tool", run: () => editor.indent() },
-  { label: "⇤", title: "내어쓰기", kind: "tool", run: () => editor.outdent() },
+  ...INDENT_KEYS,
   { label: "↶", title: "되돌리기", kind: "tool", run: () => editor.undo() },
 ];
+
+const C_SYMBOL_KEYS = [
+  ...INDENT_KEYS,
+  { label: ";" },
+  { label: "{ }", run: () => editor.insertPair("{", "}") },
+  { label: "( )", run: () => editor.insertPair("(", ")") },
+  { label: ")" },
+  { label: "[ ]", run: () => editor.insertPair("[", "]") },
+  { label: '" "', run: () => editor.insertPair('"', '"') },
+  { label: "' '", run: () => editor.insertPair("'", "'") },
+  text("%d"), text("\\n"), { label: "&" },
+  { label: "=" }, { label: "==" }, { label: "+" }, { label: "-" }, { label: "*" }, { label: "/" },
+  { label: "%" }, { label: "<" }, { label: ">" }, { label: "!" }, { label: "|" }, { label: "," },
+  { label: "#" },
+  { gap: true },
+  ...TOOL_KEYS,
+];
+
+const C_WORD_KEYS = [
+  fn("printf"), fn("scanf"),
+  { gap: true },
+  word("int"), word("double"), word("char"), word("if"), word("else"), word("for"), word("while"),
+  word("return"), word("break", "break;"), word("void"),
+  { label: "#include", kind: "word", run: () => editor.insertText("#include <stdio.h>\n") },
+  { label: "main", kind: "fn", run: () => editor.insertText("int main(void) {\n    \n    return 0;\n}\n") },
+  { gap: true },
+  ...INDENT_KEYS,
+  { label: "↶", title: "되돌리기", kind: "tool", run: () => editor.undo() },
+];
+
+const KEYSETS = {
+  python: { symbols: PY_SYMBOL_KEYS, words: PY_WORD_KEYS },
+  c: { symbols: C_SYMBOL_KEYS, words: C_WORD_KEYS },
+};
 
 let keyMode = "symbols";
 function renderKeybar() {
@@ -146,7 +208,7 @@ function renderKeybar() {
     seg.append(b);
   }
   bar.append(seg);
-  for (const key of keyMode === "symbols" ? SYMBOL_KEYS : WORD_KEYS) {
+  for (const key of KEYSETS[langOf()][keyMode]) {
     if (key.gap) {
       bar.append(el("span", "gap"));
       continue;
@@ -216,7 +278,8 @@ function resetOutput(showWelcome = false) {
 }
 
 function showError(error) {
-  const { title, detail } = explainError(error);
+  // C 실행기는 처음부터 한국어 설명을 주고, 파이썬 오류는 여기서 설명으로 바꿔요.
+  const { title, detail } = error.title ? error : explainError(error);
   const card = el("div", "error-card");
   card.append(el("h3", "", title));
   card.append(el("p", "", detail));
@@ -227,7 +290,7 @@ function showError(error) {
     go.addEventListener("click", () => editor.markError(error.line));
     row.append(go);
   }
-  row.append(el("span", "error-type", `${error.type}: ${error.message}`));
+  row.append(el("span", "error-type", error.message ? `${error.type}: ${error.message}` : error.type));
   card.append(row);
   if (error.traceback) {
     const more = el("details");
@@ -238,9 +301,9 @@ function showError(error) {
   append(card);
 }
 
-function showFatal(message) {
+function showFatal(engine, message) {
   const card = el("div", "error-card");
-  card.append(el("h3", "", "파이썬 엔진을 불러오지 못했어요"));
+  card.append(el("h3", "", `${LANGS[engine.lang].engine} 엔진을 불러오지 못했어요`));
   card.append(el("p", "", "처음 한 번은 인터넷이 필요해요. 연결을 확인하고 다시 시도해 주세요."));
   const row = el("div", "row");
   const retry = el("button", "btn btn-primary", "다시 시도");
@@ -263,7 +326,7 @@ function renderVariables(variables) {
   for (const v of variables) {
     const item = el("li", "var-item");
     const type = el("span", "var-type", v.type);
-    type.dataset.kind = v.type;
+    type.dataset.kind = v.kind || v.type;
     item.append(el("span", "var-name", v.name), type, el("span", "var-value", v.value));
     list.append(item);
   }
@@ -280,54 +343,69 @@ function switchTab(name) {
 
 // ---------- 실행 ----------
 const STATE_TEXT = {
-  loading: "파이썬 준비 중",
-  ready: "파이썬 준비됨",
+  off: "준비 전",
+  loading: "준비 중",
+  ready: "준비됨",
   running: "실행 중",
   waiting: "답을 기다려요",
   failed: "엔진 오류",
 };
 
-const engine = new Engine({
-  onState(state) {
-    const chip = $("#engine-chip");
-    chip.dataset.state = state;
-    $("#engine-text").textContent = state === "ready" && engine.python
-      ? `Python ${engine.python.split(".").slice(0, 2).join(".")} 준비됨`
-      : STATE_TEXT[state];
-    $("#btn-stop").disabled = !engine.busy;
-  },
-  onProgress(text) {
-    if (engine.state === "loading") $("#engine-text").textContent = text;
-    const note = consoleEl.querySelector(".note[data-loading]");
-    if (note) note.textContent = `파이썬 엔진을 불러오는 중이에요: ${text}. 처음에는 조금 걸릴 수 있어요.`;
-  },
-  onOutput: writeOutput,
-  onInput(prompt) {
-    append(el("div", "ask", prompt || "입력을 기다려요"));
-    const form = $("#answer-form");
-    form.hidden = false;
-    $("#answer-label").textContent = prompt.trim() ? `답하기: ${prompt.trim()}` : "프로그램이 답을 기다려요";
-    switchTab("console");
-    $("#answer-input").focus({ preventScroll: true });
-  },
-  onDone(result, run) {
-    $("#answer-form").hidden = true;
-    if (result.status === "error") {
-      showError(result.error);
-      if (result.error.line) editor.markError(result.error.line);
-      append(el("div", "run-end error", "오류로 멈췄어요"));
-    } else if (result.status === "exit") {
-      append(el("div", "run-end", `sys.exit(${result.exitCode})로 끝났어요`));
-    } else {
-      const time = run.asked === 0 && typeof result.seconds === "number" ? ` · ${result.seconds.toFixed(2)}초` : "";
-      append(el("div", "run-end ok", `끝났어요${time}`));
-    }
-    renderVariables(result.variables);
-  },
-  onFatal: showFatal,
-});
+function updateChip(engine) {
+  const chip = $("#engine-chip");
+  chip.dataset.state = engine.state;
+  const name = engine.label || LANGS[engine.lang].engine;
+  $("#engine-text").textContent = engine.state === "running" || engine.state === "waiting"
+    ? STATE_TEXT[engine.state]
+    : `${name} ${STATE_TEXT[engine.state]}`;
+  $("#btn-stop").disabled = !engine.busy;
+}
+
+function makeEngine(lang) {
+  const engine = new Engine({
+    onState() {
+      if (langOf() === lang) updateChip(engine);
+    },
+    onProgress(text) {
+      if (langOf() !== lang) return;
+      if (engine.state === "loading") $("#engine-text").textContent = text;
+      const note = consoleEl.querySelector(".note[data-loading]");
+      if (note) note.textContent = `${LANGS[lang].engine} 엔진을 불러오는 중이에요: ${text}. 처음에는 조금 걸릴 수 있어요.`;
+    },
+    onOutput: writeOutput,
+    onInput(prompt) {
+      append(el("div", "ask", prompt || "입력을 기다려요"));
+      const form = $("#answer-form");
+      form.hidden = false;
+      $("#answer-label").textContent = prompt.trim() ? `답하기: ${prompt.trim()}` : "프로그램이 답을 기다려요";
+      switchTab("console");
+      $("#answer-input").focus({ preventScroll: true });
+    },
+    onDone(result, run) {
+      $("#answer-form").hidden = true;
+      if (result.status === "error") {
+        showError(result.error);
+        if (result.error.line) editor.markError(result.error.line);
+        append(el("div", "run-end error", "오류로 멈췄어요"));
+      } else if (result.status === "exit") {
+        append(el("div", "run-end", `${lang === "c" ? "exit" : "sys.exit"}(${result.exitCode})로 끝났어요`));
+      } else {
+        const time = run.asked === 0 && typeof result.seconds === "number" ? ` · ${result.seconds.toFixed(2)}초` : "";
+        const code = result.exitCode ? ` (종료 코드 ${result.exitCode})` : "";
+        append(el("div", `run-end ${result.exitCode ? "" : "ok"}`, `끝났어요${code}${time}`));
+      }
+      renderVariables(result.variables);
+    },
+    onFatal: (message) => showFatal(engine, message),
+  }, lang);
+  return engine;
+}
+
+const engines = { python: makeEngine("python"), c: makeEngine("c") };
+const cur = () => engines[langOf()];
 
 function runCode() {
+  const engine = cur();
   if (engine.busy) engine.stop();
   const file = store.current();
   store.saveNow();
@@ -337,14 +415,14 @@ function runCode() {
   switchTab("console");
   append(el("div", "run-head", `${file.name} 실행`));
   if (engine.run(editor.value) === "queued") {
-    const note = el("p", "note", "파이썬 엔진을 불러오는 중이에요. 처음에는 조금 걸릴 수 있어요.");
+    const note = el("p", "note", `${LANGS[engine.lang].engine} 엔진을 불러오는 중이에요. 처음에는 조금 걸릴 수 있어요.`);
     note.dataset.loading = "";
     append(note);
   }
 }
 
 function stopCode() {
-  if (!engine.stop()) return;
+  if (!cur().stop()) return;
   $("#answer-form").hidden = true;
   append(el("div", "run-end stopped", "멈췄어요"));
 }
@@ -356,6 +434,7 @@ $("#tab-vars").addEventListener("click", () => switchTab("vars"));
 
 $("#answer-form").addEventListener("submit", (e) => {
   e.preventDefault();
+  const engine = cur();
   if (engine.state !== "waiting") return;
   const input = $("#answer-input");
   const value = input.value;
@@ -385,7 +464,7 @@ function renderFileList() {
     b.type = "button";
     b.setAttribute("aria-current", String(file.id === current.id));
     const lines = file.code ? file.code.split("\n").length : 0;
-    b.append(el("span", "item-name", file.name), el("span", "item-meta", `${timeAgo(file.updated)} · ${lines}줄`));
+    b.append(el("span", "item-name", file.name), el("span", "item-meta", `${LANGS[file.lang].name} · ${timeAgo(file.updated)} · ${lines}줄`));
     b.addEventListener("click", () => {
       openFile(store.select(file.id));
       closeDrawer();
@@ -398,18 +477,21 @@ function renderFileList() {
 function renderExamples() {
   const list = $("#example-list");
   list.textContent = "";
-  for (const example of EXAMPLES) {
-    const li = el("li");
-    const b = el("button");
-    b.type = "button";
-    b.append(el("span", "item-name", example.name), el("span", "item-meta", example.about));
-    b.addEventListener("click", () => {
-      openFile(store.create(example.name, example.code));
-      closeDrawer();
-      toast(`'${example.name}' 예제를 새 코드로 열었어요`);
-    });
-    li.append(b);
-    list.append(li);
+  for (const lang of Object.keys(LANGS)) {
+    list.append(el("li", "example-group", `${LANGS[lang].name} 예제`));
+    for (const example of EXAMPLES.filter((x) => x.lang === lang)) {
+      const li = el("li");
+      const b = el("button");
+      b.type = "button";
+      b.append(el("span", "item-name", example.name), el("span", "item-meta", example.about));
+      b.addEventListener("click", () => {
+        openFile(store.create(example.name, example.code, example.lang));
+        closeDrawer();
+        toast(`'${example.name}' 예제를 새 코드로 열었어요`);
+      });
+      li.append(b);
+      list.append(li);
+    }
   }
 }
 
@@ -435,18 +517,21 @@ $("#btn-drawer").addEventListener("click", openDrawer);
 $("#btn-drawer-close").addEventListener("click", closeDrawer);
 $("#scrim").addEventListener("click", closeDrawer);
 
-$("#btn-new").addEventListener("click", () => {
-  openFile(store.create("새 코드", ""));
-  closeDrawer();
-  editor.focus();
-});
+for (const lang of Object.keys(LANGS)) {
+  $(`#btn-new-${lang}`).addEventListener("click", () => {
+    openFile(store.create(`새 ${LANGS[lang].name} 코드`, LANGS[lang].newCode, lang));
+    closeDrawer();
+    editor.focus();
+  });
+}
 
 $("#file-import").addEventListener("change", async (e) => {
   const file = e.target.files[0];
   e.target.value = "";
   if (!file) return;
-  const text = (await file.text()).replace(/\r\n/g, "\n");
-  openFile(store.create(file.name.replace(/\.(py|txt)$/i, "") || "가져온 코드", text));
+  const code = (await file.text()).replace(/\r\n/g, "\n");
+  const lang = /\.(c|h)$/i.test(file.name) ? "c" : "python";
+  openFile(store.create(file.name.replace(/\.(py|txt|c|h)$/i, "") || "가져온 코드", code, lang));
   closeDrawer();
   toast(`'${file.name}'을 가져왔어요`);
 });
@@ -462,10 +547,11 @@ $("#btn-copy").addEventListener("click", async () => {
 
 $("#btn-export").addEventListener("click", () => {
   const file = store.current();
-  const url = URL.createObjectURL(new Blob([editor.value], { type: "text/x-python;charset=utf-8" }));
+  const info = LANGS[file.lang];
+  const url = URL.createObjectURL(new Blob([editor.value], { type: `${info.mime};charset=utf-8` }));
   const a = el("a");
   a.href = url;
-  a.download = `${file.name}.py`;
+  a.download = `${file.name}.${info.ext}`;
   document.body.append(a);
   a.click();
   a.remove();
@@ -547,13 +633,11 @@ function registerServiceWorker() {
 }
 
 document.documentElement.style.setProperty("--code-size", `${store.settings.fontSize}px`);
-renderKeybar();
 renderExamples();
 showSaveState();
 openFile(store.current());
 fitViewport();
 registerServiceWorker();
-engine.start();
 
 // 테스트에서 상태를 살펴볼 수 있게 열어 둬요.
-window.pybridge = { engine, editor, store };
+window.pybridge = { engines, editor, store, get engine() { return cur(); } };

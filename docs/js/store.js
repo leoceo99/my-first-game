@@ -29,9 +29,10 @@ export class Store {
     if (isValid(data)) {
       this.data = data;
     } else {
-      const file = { id: makeId(), name: welcome.name, code: welcome.code, updated: Date.now() };
+      const file = { id: makeId(), name: welcome.name, code: welcome.code, lang: welcome.lang || "python", updated: Date.now() };
       this.data = { files: [file], currentId: file.id };
     }
+    for (const f of this.data.files) if (f.lang !== "c") f.lang = "python"; // 예전 파일은 모두 파이썬이에요
     this.data.settings = { fontSize: 16, ...(this.data.settings || {}) };
     if (!this.data.files.some((f) => f.id === this.data.currentId)) {
       this.data.currentId = this.data.files[0].id;
@@ -66,8 +67,8 @@ export class Store {
     return `${base} ${n}`;
   }
 
-  create(name, code = "") {
-    const file = { id: makeId(), name: this.uniqueName(name), code, updated: Date.now() };
+  create(name, code = "", lang = "python") {
+    const file = { id: makeId(), name: this.uniqueName(name), code, lang, updated: Date.now() };
     this.data.files.push(file);
     this.data.currentId = file.id;
     this.saveSoon();
@@ -94,7 +95,7 @@ export class Store {
   remove(id) {
     this.data.files = this.data.files.filter((f) => f.id !== id);
     if (this.data.files.length === 0) {
-      return this.create("새 코드");
+      return this.create("새 코드", "", "python");
     }
     if (this.data.currentId === id) this.data.currentId = this.files()[0].id;
     this.saveSoon();

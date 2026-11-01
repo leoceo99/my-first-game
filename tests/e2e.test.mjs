@@ -211,6 +211,53 @@ test("코드는 이 기기에 저장되고 예제로 새 코드를 만들 수 �
   await context.close();
 });
 
+test("C 코드: 예제 실행, scanf 대화, 변수, 오류 안내, 중괄호 자동 들여쓰기", { skip: !haveEngine }, async () => {
+  const { context, page, errors } = await openApp({ serviceWorkers: "block" });
+  await page.click("#btn-drawer");
+  await page.click(".example-list button:has-text('C 첫 만남')");
+  assert.equal(await page.locator("#lang-badge").innerText(), "C");
+  await page.waitForFunction(() => window.pybridge.engine.lang === "c" && window.pybridge.engine.state === "ready");
+  assert.match(await page.locator("#engine-text").innerText(), /C 준비됨/);
+
+  await page.click("#btn-run");
+  await answer(page, "영희");
+  await answer(page, "15");
+  await waitIdle(page);
+  const text = await consoleText(page);
+  assert.match(text, /반가워요, 영희님!/);
+  assert.match(text, /10년 뒤에는 25살이 되겠네요\./);
+  assert.equal(await page.locator(".ask").count(), 2);
+  assert.match(await page.locator(".ask").first().innerText(), /이름이 뭐예요\?/);
+  await page.click("#tab-vars");
+  const vars = await page.locator("#vars").innerText();
+  assert.match(vars, /name[\s\S]*char \[20\][\s\S]*"영희"/);
+  assert.match(vars, /age[\s\S]*int[\s\S]*15/);
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/6-c-run.png` });
+
+  await setCode(page, '#include <stdio.h>\n\nint main(void) {\n    int x;\n    scanf("%d", x);\n    return 0;\n}\n');
+  await page.click("#btn-run");
+  await waitIdle(page);
+  assert.match(await page.locator(".error-card h3").innerText(), /&를 붙여야/);
+  assert.match(await page.locator(".error-card").innerText(), /C 컴파일 오류/);
+  assert.match(await page.locator(".error-card").innerText(), /5번째 줄 보기/);
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/7-c-error.png` });
+
+  // 새 C 코드는 기본 틀로 시작하고, { 다음 엔터는 자동으로 들여 써요.
+  await page.click("#btn-drawer");
+  await page.click("#btn-new-c");
+  assert.match(await page.evaluate(() => window.pybridge.editor.value), /int main\(void\) \{/);
+  await setCode(page, "");
+  await page.click(".ed-input");
+  await page.keyboard.type("if (1) {");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("x = 1;");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("}");
+  assert.equal(await page.evaluate(() => window.pybridge.editor.value), "if (1) {\n    x = 1;\n}");
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
 test("세로 화면", { skip: !haveEngine || !SHOTS }, async () => {
   const { context, page } = await openApp({ serviceWorkers: "block", viewport: { width: 820, height: 1180 } });
   await page.click("#btn-drawer");
@@ -221,5 +268,31 @@ test("세로 화면", { skip: !haveEngine || !SHOTS }, async () => {
     mkdirSync(SHOTS, { recursive: true });
     await page.screenshot({ path: `${SHOTS}/5-portrait.png` });
   }
+  await context.close();
+});
+
+test("C 코드: 키 바, 색칠, 실행 오류, 무한 반복 멈추기", { skip: !haveEngine }, async () => {
+  const { context, page, errors } = await openApp({ serviceWorkers: "block" });
+  await page.click("#btn-drawer");
+  await page.click(".example-list button:has-text('C 일부러 틀린 코드')");
+  await page.waitForFunction(() => window.pybridge.engine.lang === "c" && window.pybridge.engine.state === "ready", null, { timeout: 10000 });
+  // C용 키 바에는 세미콜론 키가 있고, #include 가 색칠돼요
+  assert.equal(await page.locator(".keybar .key:text-is(';')").count(), 1);
+  assert.equal(await page.locator(".ed-highlight .tok-decorator").first().innerText(), "#include ");
+
+  await page.click("#btn-run");
+  await waitIdle(page);
+  assert.match(await page.locator(".error-card h3").innerText(), /값을 넣지 않은 변수 'sum'/);
+  assert.match(await page.locator(".error-card").innerText(), /C 실행 오류/);
+  assert.equal(await page.locator(".ed-errline").isVisible(), true);
+
+  // 무한 반복은 멈춤 버튼으로 끝내고, C 엔진은 바로 다시 준비돼요
+  await setCode(page, "#include <stdio.h>\nint main(void) {\n    while (1) { }\n}\n");
+  await page.click("#btn-run");
+  await page.waitForTimeout(500);
+  await page.click("#btn-stop");
+  await page.waitForFunction(() => window.pybridge.engine.state === "ready", null, { timeout: 10000 });
+  assert.match(await consoleText(page), /멈췄어요/);
+  assert.deepEqual(errors, []);
   await context.close();
 });

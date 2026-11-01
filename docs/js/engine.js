@@ -1,4 +1,5 @@
-// 파이썬 엔진(Web Worker)을 켜고, 코드를 실행하고, 입력을 전달하고, 멈추게 해요.
+// 언어 엔진(Web Worker)을 켜고, 코드를 실행하고, 입력을 전달하고, 멈추게 해요.
+// 파이썬은 Pyodide 엔진(worker.js), C는 우리가 만든 C 실행기(c-worker.js)를 써요.
 //
 // 상태: "loading" → "ready" ⇄ "running" ⇄ "waiting"(input 답을 기다림), 또는 "failed"
 
@@ -21,11 +22,12 @@ export function engineBases() {
 }
 
 export class Engine {
-  constructor(handlers) {
+  constructor(handlers, lang = "python") {
     this.handlers = handlers;
-    this.state = "loading";
+    this.lang = lang;
+    this.state = "off";
     this.worker = null;
-    this.python = "";
+    this.label = "";
     this.current = null;
     this.pendingCode = null;
     this.runCounter = 0;
@@ -42,7 +44,8 @@ export class Engine {
 
   start() {
     this.worker?.terminate();
-    const worker = new Worker(new URL("../worker.js", import.meta.url), { type: "module" });
+    const file = this.lang === "c" ? "../c-worker.js" : "../worker.js";
+    const worker = new Worker(new URL(file, import.meta.url), { type: "module" });
     this.worker = worker;
     this.current = null;
     this.setState("loading");
@@ -69,7 +72,7 @@ export class Engine {
         this.handlers.onProgress?.(msg.text);
         break;
       case "ready":
-        this.python = msg.python;
+        this.label = msg.label || `Python ${String(msg.python).split(".").slice(0, 2).join(".")}`;
         this.setState("ready");
         if (this.pendingCode !== null) {
           const code = this.pendingCode;
@@ -108,7 +111,7 @@ export class Engine {
   run(code) {
     if (this.state !== "ready") {
       this.pendingCode = code;
-      if (this.state === "failed") this.start();
+      if (this.state === "failed" || this.state === "off") this.start();
       return "queued";
     }
     this.current = {
@@ -117,6 +120,7 @@ export class Engine {
       answers: [],
       asked: 0,
       seed: Math.floor(Math.random() * 2 ** 31),
+      time: Math.floor(Date.now() / 1000),
     };
     this.send();
     return "started";
@@ -126,7 +130,7 @@ export class Engine {
     const run = this.current;
     this.setState("running");
     this.worker.postMessage({
-      type: "run", runId: run.runId, code: run.code, answers: run.answers, seed: run.seed,
+      type: "run", runId: run.runId, code: run.code, answers: run.answers, seed: run.seed, time: run.time,
     });
   }
 

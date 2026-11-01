@@ -4,11 +4,13 @@
  */
 "use strict";
 
-const CACHE = "pybridge-v2";
+const CACHE = "pybridge-v3";
 const APP_FILES = [
   "./", "./index.html", "./style.css", "./worker.js", "./py/runner.py",
   "./js/app.js", "./js/editor.js", "./js/engine.js", "./js/store.js",
   "./js/highlight.js", "./js/errors.js", "./js/examples.js",
+  "./c-worker.js", "./js/c/index.js", "./js/c/lexer.js", "./js/c/parser.js", "./js/c/compile.js",
+  "./js/c/runtime.js", "./js/c/types.js",
   "./manifest.webmanifest", "./icons/icon.svg", "./icons/icon-192.png", "./icons/icon-512.png",
   "./icons/apple-touch-icon.png",
 ];
