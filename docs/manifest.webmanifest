@@ -1,0 +1,17 @@
+{
+  "name": "파이브릿지",
+  "short_name": "파이브릿지",
+  "description": "아이패드에서 바로 쓰는 파이썬 코딩 앱",
+  "lang": "ko",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#e9eef3",
+  "theme_color": "#2b5b84",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
