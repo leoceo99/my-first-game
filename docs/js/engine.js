@@ -68,7 +68,8 @@ export class Engine {
     worker.postMessage({
       type: "init",
       bases: engineBases(),
-      runnerUrl: new URL("../py/runner.py", import.meta.url).href,
+      // runner.txt는 .py 파일을 올릴 수 없는 곳(예: 미리보기 페이지)에 올린 같은 파일이에요.
+      runnerUrls: ["../py/runner.py", "../py/runner.txt"].map((p) => new URL(p, import.meta.url).href),
     });
   }
 

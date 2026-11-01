@@ -3,7 +3,7 @@
  * 화면과 따로 돌아가기 때문에, 사용자 코드가 무한 반복에 빠져도 화면은 멈추지 않고
  * [멈춤]을 누르면 이 워커를 통째로 끝낼 수 있어요.
  *
- * 화면 → 워커: {type: "init", bases, runnerUrl} / {type: "run", runId, code, answers, seed}
+ * 화면 → 워커: {type: "init", bases, runnerUrls} / {type: "run", runId, code, answers, seed}
  * 워커 → 화면: {type: "ready"|"fatal"|"output"|"input"|"done", ...}
  */
 const INPUT_URL = new URL("__pybridge_input__", self.location).href;
@@ -58,10 +58,20 @@ async function loadEngine(bases) {
   throw new Error(problems.join(" / "));
 }
 
-async function init({ bases, runnerUrl }) {
+async function fetchRunner(urls) {
+  for (const url of urls) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) return await response.text();
+    } catch { /* 다음 주소를 시도해요 */ }
+  }
+  throw new Error("실행 도구(runner.py)를 불러오지 못했어요");
+}
+
+async function init({ bases, runnerUrls }) {
   try {
     pyodide = await loadEngine(bases);
-    const source = await (await fetch(runnerUrl)).text();
+    const source = await fetchRunner(runnerUrls);
     pyodide.runPython(source);
     runFn = pyodide.globals.get("run");
     canBlock = probeBlockingInput();
