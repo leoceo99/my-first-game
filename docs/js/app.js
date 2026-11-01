@@ -296,6 +296,11 @@ const engine = new Engine({
       : STATE_TEXT[state];
     $("#btn-stop").disabled = !engine.busy;
   },
+  onProgress(text) {
+    if (engine.state === "loading") $("#engine-text").textContent = text;
+    const note = consoleEl.querySelector(".note[data-loading]");
+    if (note) note.textContent = `파이썬 엔진을 불러오는 중이에요: ${text}. 처음에는 조금 걸릴 수 있어요.`;
+  },
   onOutput: writeOutput,
   onInput(prompt) {
     append(el("div", "ask", prompt || "입력을 기다려요"));
@@ -332,7 +337,9 @@ function runCode() {
   switchTab("console");
   append(el("div", "run-head", `${file.name} 실행`));
   if (engine.run(editor.value) === "queued") {
-    append(el("p", "note", "파이썬 엔진을 불러오는 중이에요. 처음에는 조금 걸릴 수 있어요."));
+    const note = el("p", "note", "파이썬 엔진을 불러오는 중이에요. 처음에는 조금 걸릴 수 있어요.");
+    note.dataset.loading = "";
+    append(note);
   }
 }
 

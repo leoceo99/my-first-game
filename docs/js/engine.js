@@ -4,9 +4,10 @@
 
 const PYODIDE_VERSION = "314.0.7";
 // 같은 엔진 파일을 두 곳에서 받을 수 있어요. 앞의 곳이 막혀 있으면 다음 곳을 써요.
+// 앞의 것은 Pyodide 공식 주소(Claude 미리보기에서도 허용돼요), 뒤의 것은 npm 사본이에요.
 const CDN_BASES = [
-  `https://cdn.jsdelivr.net/npm/pyodide@${PYODIDE_VERSION}/`,
   `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`,
+  `https://cdn.jsdelivr.net/npm/pyodide@${PYODIDE_VERSION}/`,
 ];
 
 /** 엔진 파일 위치 목록. 테스트할 때만 ?engine=local 로 이 폴더 안의 사본을 써요. */
@@ -75,6 +76,9 @@ export class Engine {
 
   onMessage(msg) {
     switch (msg.type) {
+      case "progress":
+        this.handlers.onProgress?.(msg.text);
+        break;
       case "ready":
         this.canBlock = msg.canBlock;
         this.python = msg.python;

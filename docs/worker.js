@@ -4,7 +4,7 @@
  * [멈춤]을 누르면 이 워커를 통째로 끝낼 수 있어요.
  *
  * 화면 → 워커: {type: "init", bases, runnerUrls} / {type: "run", runId, code, answers, seed}
- * 워커 → 화면: {type: "ready"|"fatal"|"output"|"input"|"done", ...}
+ * 워커 → 화면: {type: "progress"|"ready"|"fatal"|"output"|"input"|"done", ...}
  */
 const INPUT_URL = new URL("__pybridge_input__", self.location).href;
 let pyodide = null;
@@ -45,10 +45,21 @@ const bridge = {
   },
 };
 
+function progress(text) {
+  postMessage({ type: "progress", text });
+}
+
 async function loadEngine(bases) {
   const problems = [];
-  for (const base of bases) {
+  for (const [i, base] of bases.entries()) {
+    const where = bases.length > 1 ? ` (${i + 1}/${bases.length})` : "";
     try {
+      // 엔진은 데이터 파일을 받지 못하면 오류 없이 영원히 기다려요.
+      // 그래서 먼저 작은 파일로 이 주소에서 받을 수 있는지 확인해요.
+      progress(`엔진 주소 확인 중${where}`);
+      const check = await fetch(`${base}pyodide-lock.json`);
+      if (!check.ok) throw new Error(`HTTP ${check.status}`);
+      progress(`엔진 받는 중${where}`);
       const { loadPyodide } = await import(`${base}pyodide.mjs`);
       return await loadPyodide({ indexURL: base });
     } catch (err) {
@@ -71,6 +82,7 @@ async function fetchRunner(urls) {
 async function init({ bases, runnerUrls }) {
   try {
     pyodide = await loadEngine(bases);
+    progress("파이썬 시작 중");
     const source = await fetchRunner(runnerUrls);
     pyodide.runPython(source);
     runFn = pyodide.globals.get("run");
