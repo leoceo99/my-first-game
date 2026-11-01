@@ -20,22 +20,11 @@ export function engineBases() {
   return CDN_BASES;
 }
 
-async function postToServiceWorker(message) {
-  const sw = navigator.serviceWorker;
-  if (sw.controller) {
-    sw.controller.postMessage(message);
-    return;
-  }
-  const registration = await sw.ready;
-  registration.active?.postMessage(message);
-}
-
 export class Engine {
   constructor(handlers) {
     this.handlers = handlers;
     this.state = "loading";
     this.worker = null;
-    this.canBlock = false;
     this.python = "";
     this.current = null;
     this.pendingCode = null;
@@ -80,7 +69,6 @@ export class Engine {
         this.handlers.onProgress?.(msg.text);
         break;
       case "ready":
-        this.canBlock = msg.canBlock;
         this.python = msg.python;
         this.setState("ready");
         if (this.pendingCode !== null) {
@@ -98,7 +86,6 @@ export class Engine {
         break;
       case "input":
         if (!this.current) return;
-        this.current.inputId = msg.id;
         this.current.asked += 1;
         this.setState("waiting");
         this.handlers.onInput?.(msg.prompt);
@@ -129,7 +116,6 @@ export class Engine {
       code,
       answers: [],
       asked: 0,
-      inputId: null,
       seed: Math.floor(Math.random() * 2 ** 31),
     };
     this.send();
@@ -144,24 +130,19 @@ export class Engine {
     });
   }
 
-  /** input()에 대한 답을 보내요. */
+  /** input()에 대한 답을 보내요. 지금까지의 답을 모두 넣어 처음부터 다시 실행해요. */
   answer(value) {
     if (this.state !== "waiting" || !this.current) return;
-    if (this.canBlock) {
-      this.setState("running");
-      postToServiceWorker({ type: "pybridge-input", id: this.current.inputId, value });
-    } else {
-      this.current.answers.push(value);
-      this.send();
-    }
+    this.current.answers.push(value);
+    this.send();
   }
 
   /** 실행을 멈춰요. 계산 중이었다면 엔진을 새로 켜야 해서 잠시 "loading"이 돼요. */
   stop() {
     this.pendingCode = null;
     if (!this.busy) return false;
-    if (this.state === "waiting" && !this.canBlock) {
-      this.current = null; // replay 방식은 이미 실행이 끝나 있어서 그냥 버리면 돼요.
+    if (this.state === "waiting") {
+      this.current = null; // 답을 기다릴 때는 이미 실행이 끝나 있어서 그냥 버리면 돼요.
       this.setState("ready");
     } else {
       this.start();

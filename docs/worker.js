@@ -6,42 +6,18 @@
  * 화면 → 워커: {type: "init", bases, runnerUrls} / {type: "run", runId, code, answers, seed}
  * 워커 → 화면: {type: "progress"|"ready"|"fatal"|"output"|"input"|"done", ...}
  */
-const INPUT_URL = new URL("__pybridge_input__", self.location).href;
 let pyodide = null;
 let runFn = null;
-let canBlock = false;
-let inputSeq = 0;
 
-// 서비스 워커가 이 워커의 요청을 받아 줄 수 있으면, input()이 진짜로 답을 기다릴 수 있어요.
-function probeBlockingInput() {
-  try {
-    const xhr = new XMLHttpRequest();
-    xhr.open("GET", `${INPUT_URL}?probe=1`, false);
-    xhr.send();
-    return xhr.status === 200 && xhr.responseText === "pong";
-  } catch {
-    return false;
-  }
-}
-
+// input()은 "다시 실행" 방식으로 처리해요: 답이 필요하면 실행을 멈추고 질문을 보내고,
+// 답을 받으면 지금까지의 답을 모두 넣어 처음부터 다시 실행해요 (이미 본 출력은 숨겨요).
+// 서비스 워커로 실제로 기다리는 방식은 아이패드(WebKit)에서 기다리는 도중 끊겨서 쓰지 않아요.
 const bridge = {
   post_output(stream, text) {
     postMessage({ type: "output", stream, text });
   },
   post_input_request(prompt) {
-    postMessage({ type: "input", prompt, id: null });
-  },
-  wait_for_input(prompt) {
-    const id = `${Date.now().toString(36)}-${++inputSeq}`;
-    postMessage({ type: "input", prompt, id });
-    for (;;) {
-      const xhr = new XMLHttpRequest();
-      xhr.open("GET", `${INPUT_URL}?id=${encodeURIComponent(id)}`, false);
-      xhr.send();
-      if (xhr.status === 200) return xhr.responseText;
-      if (xhr.status !== 204) throw new Error(`입력을 받지 못했어요 (${xhr.status})`);
-      // 204: 아직 답이 없어요. 다시 기다립니다.
-    }
+    postMessage({ type: "input", prompt });
   },
 };
 
@@ -86,9 +62,8 @@ async function init({ bases, runnerUrls }) {
     const source = await fetchRunner(runnerUrls);
     pyodide.runPython(source);
     runFn = pyodide.globals.get("run");
-    canBlock = probeBlockingInput();
     const python = pyodide.runPython("import sys; sys.version.split()[0]");
-    postMessage({ type: "ready", python, canBlock });
+    postMessage({ type: "ready", python });
   } catch (err) {
     postMessage({ type: "fatal", message: String(err && err.message ? err.message : err) });
   }
@@ -97,7 +72,7 @@ async function init({ bases, runnerUrls }) {
 function run({ runId, code, answers, seed }) {
   let result;
   try {
-    const json = runFn(code, JSON.stringify(answers || []), seed, canBlock ? "block" : "replay", bridge);
+    const json = runFn(code, JSON.stringify(answers || []), seed, "replay", bridge);
     result = JSON.parse(json);
   } catch (err) {
     result = {

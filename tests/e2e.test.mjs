@@ -69,7 +69,6 @@ async function answer(page, text) {
 
 test("기본 실행, input 대화, 변수 (replay 방식)", { skip: !haveEngine }, async () => {
   const { context, page, errors } = await openApp({ serviceWorkers: "block" });
-  assert.equal(await page.evaluate(() => window.pybridge.engine.canBlock), false);
   assert.match(await page.locator("#engine-text").innerText(), /Python 3\.\d+ 준비됨/);
 
   // 처음 열면 '첫 만남' 예제가 들어 있어요.
@@ -96,30 +95,38 @@ test("기본 실행, input 대화, 변수 (replay 방식)", { skip: !haveEngine 
   await context.close();
 });
 
-test("서비스 워커가 있으면 input이 진짜로 기다려요 (block 방식)", { skip: !haveEngine }, async () => {
+test("서비스 워커가 켜진 앱에서도 반복문 속 input이 잘 돼요", { skip: !haveEngine }, async () => {
   const { context, page, errors } = await openApp();
-  // 처음 방문에서는 서비스 워커가 설치만 되므로, 한 번 새로 고쳐서 엔진이 그 아래에서 돌게 해요.
+  // 서비스 워커가 페이지를 맡은 상태(홈 화면 앱과 같은 상태)로 다시 열어요.
   await page.waitForFunction(() => navigator.serviceWorker.controller !== null, null, { timeout: 15000 });
   await page.reload();
   await page.waitForFunction(() => window.pybridge?.engine.state === "ready", null, { timeout: 60000 });
-  assert.equal(await page.evaluate(() => window.pybridge.engine.canBlock), true);
 
   await setCode(page, [
     "import random",
     "secret = random.randint(1, 10**9)",
     "print('시작', secret)",
-    "a = input('첫 답? ')",
-    "b = input('둘째 답? ')",
-    "print('결과', a + b, secret)",
+    "total = 0",
+    "passed = 0",
+    "for i in range(5):",
+    "    score = int(input('점수 입력: '))",
+    "    total = total + score",
+    "    if score >= 60:",
+    "        passed = passed + 1",
+    "print('합계', total, '통과', passed, secret)",
   ].join("\n"));
   await page.click("#btn-run");
-  await answer(page, "가");
-  await answer(page, "나");
+  await waitAsk(page);
+  await page.waitForTimeout(20000); // 답을 늦게 해도 오류가 나지 않아야 해요
+  assert.equal(await page.locator(".error-card").count(), 0);
+  for (const score of ["80", "50", "90", "70", "40"]) await answer(page, score);
   await waitIdle(page);
   const text = await consoleText(page);
   const secret = text.match(/시작 (\d+)/)[1];
-  assert.match(text, new RegExp(`결과 가나 ${secret}`));
+  assert.match(text, new RegExp(`합계 330 통과 3 ${secret}`));
   assert.equal((text.match(/시작/g) || []).length, 1);
+  assert.equal(await page.locator(".ask").count(), 5);
+  assert.equal(await page.locator(".reply").count(), 5);
   assert.deepEqual(errors, []);
   await context.close();
 });
