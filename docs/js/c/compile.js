@@ -1,11 +1,11 @@
 // 구문 트리를 검사하고(타입, 선언), 바로 실행할 수 있는 JS 함수(클로저)로 바꿔요.
 
 import {
-  T, Ptr, Store, ptr, arr, compileError, runtimeError, convert, zeroOf, truthy, cells, baseOf, decay,
-  isInt, isFloat, isArith, isPtr, isArr, isScalar, is64, isVoid, isCharLike, sameType, common, promote,
-  typeName, friendlyType,
+  T, Ptr, Store, FnRef, ptr, arr, func, compileError, runtimeError, convert, zeroOf, zerosOf, truthy, cells, baseOf,
+  alignOf, isInt, isFloat, isArith, isPtr, isArr, isScalar, is64, isVoid, isCharLike, isStruct, isFunc, isFuncPtr,
+  sameType, common, promote, typeName, friendlyType,
 } from "./types.js";
-import { BUILTINS, FILE_T, parseFormat, retypeHeap } from "./runtime.js";
+import { BUILTINS, FILE_T, STDIN, STDOUT, STDERR, parseFormat, retypeHeap } from "./runtime.js";
 
 const NORMAL = 0;
 const BREAK = 1;
@@ -110,7 +110,11 @@ const COMPARE = {
   "!=": (a, b) => (a !== b ? 1 : 0),
 };
 
-const ptrEq = (a, b) => (a === null || b === null ? a === b : a.store === b.store && a.off === b.off);
+const ptrEq = (a, b) => {
+  if (a === b) return true;
+  if (a === null || b === null || a instanceof FnRef || b instanceof FnRef) return false;
+  return a.store === b.store && a.off === b.off;
+};
 
 function ptrCompare(op, line) {
   if (op === "==") return (a, b) => (ptrEq(a, b) ? 1 : 0);
@@ -203,25 +207,68 @@ export class Compiler {
       }
       return arr(of, len);
     }
-    if (t.k === "ptr") return ptr(this.resolveType(t.to));
+    if (t.k === "ptr") return isStruct(t.to) ? ptr(t.to) : ptr(this.resolveType(t.to));
+    if (t.k === "struct") return this.layout(t, opts.line ?? t.line);
     if (t.k === "func") {
+      const ret = this.resolveType(t.ret);
+      if (isArr(ret)) throw compileError(t.line, "함수는 배열을 돌려줄 수 없어요", "배열 대신 포인터나 구조체를 돌려줘 보세요.");
       return {
         ...t,
-        ret: this.resolveType(t.ret),
+        ret,
         params: t.params.map((p) => {
           const pt = this.resolveType(p.type, { param: true });
-          return { ...p, type: isArr(pt) ? ptr(pt.of) : pt };
+          return { ...p, type: isArr(pt) ? ptr(pt.of) : isFunc(pt) ? ptr(pt) : pt };
         }),
       };
     }
     return t;
   }
 
+  /** 구조체의 멤버 위치(칸 번호)와 크기를 정해요. */
+  layout(t, line) {
+    if (t.cellCount !== undefined || t.laying) return t;
+    if (!t.complete) {
+      throw compileError(line, `${typeName(t)}의 내용이 아직 정의되지 않았어요`, `${typeName(t)} { ... }; 로 멤버를 먼저 정해 주세요.`);
+    }
+    t.laying = true;
+    let off = 0;
+    let bytes = 0;
+    let align = 1;
+    for (const f of t.fields) {
+      const ft = this.resolveType(f.type, { line: f.line });
+      if (isVoid(ft) || isFunc(ft)) throw compileError(f.line, `구조체 멤버 '${f.name}'의 타입이 올바르지 않아요`);
+      if (ft === t || (isArr(ft) && baseOf(ft) === t)) {
+        throw compileError(f.line, "구조체가 자기 자신을 멤버로 가질 수 없어요", `포인터로 써 주세요. 예: ${typeName(t)} *${f.name};`);
+      }
+      const a = alignOf(ft);
+      bytes = Math.ceil(bytes / a) * a;
+      f.type = ft;
+      f.off = off;
+      f.byteOff = bytes;
+      bytes += ft.size;
+      off += cells(ft);
+      align = Math.max(align, a);
+    }
+    t.size = Math.ceil(bytes / align) * align;
+    t.align = align;
+    t.cellCount = off;
+    t.laying = false;
+    return t;
+  }
+
+  /** 구조체 포인터를 쓸 때 구조체 모양이 정해져 있는지 확인해요. */
+  need(t, line) {
+    if (isStruct(t)) this.layout(t, line);
+    else if (isArr(t)) this.need(t.of, line);
+    return t;
+  }
+
   // ---------- 값 변환 ----------
   value(E, line) {
-    if (E.fnName) {
-      throw compileError(line ?? E.line, `함수 '${E.fnName}' 뒤에 괄호가 필요해요`, `함수를 부르려면 ${E.fnName}(...) 처럼 써요.`);
+    if (E.builtinName) {
+      throw compileError(line ?? E.line, `표준 함수 '${E.builtinName}'는 값으로 쓸 수 없어요`, `함수를 부르려면 ${E.builtinName}(...) 처럼 괄호를 붙여요.`);
     }
+    if (isFunc(E.t)) return { t: ptr(E.t), ev: E.ev, fnName: E.fnName };
     if (isVoid(E.t)) throw compileError(line ?? E.line, "void 함수의 결과는 값으로 쓸 수 없어요", "돌려주는 값이 없는 함수예요.");
     return rv(E);
   }
@@ -244,12 +291,23 @@ export class Compiler {
       if (isPtr(from)) {
         const a = from.to;
         const b = to.to;
+        if (isFunc(b) || isFunc(a)) {
+          const okFn = isFunc(a) && isFunc(b) && (b.any ? isInt(a.ret) : sameType(a, b) || b.noProto || a.noProto);
+          if (!okFn) {
+            throw compileError(line, `${what}의 함수 모양이 맞지 않아요`,
+              b.any ? "비교 함수는 int cmp(const void *a, const void *b) 모양이어야 해요." : `${typeName(to)}가 필요한데 ${typeName(from)}를 넣었어요.`);
+          }
+          return { t: to, ev: E.ev };
+        }
         const ok = sameType(a, b) || isVoid(a) || isVoid(b) || (isCharLike(a) && isCharLike(b)) ||
           (isArr(a) && sameType(a.of, b)) || b.k === "file";
         if (!ok) {
           throw compileError(line, `${what}의 주소 타입이 맞지 않아요`, `${typeName(to)}가 필요한데 ${typeName(from)}를 넣었어요.`);
         }
-        if (isVoid(a) && !isVoid(b)) return { t: to, ev: (f) => retypeHeap(E.ev(f), b, line) };
+        if (isVoid(a) && !isVoid(b)) {
+          const target = this.need(b, line);
+          return { t: to, ev: (f) => retypeHeap(E.ev(f), target, line) };
+        }
         return { t: to, ev: E.ev };
       }
       if (E.strChar) {
@@ -303,6 +361,7 @@ export class Compiler {
       case "pre": case "post": return this.incdec(node, node.k === "pre");
       case "call": return this.call(node);
       case "index": return this.index(node);
+      case "member": return this.member(node);
       case "cast": return this.cast(node);
       case "sizeof": {
         let t = node.type ? this.resolveType(node.type) : this.expr(node.e).t;
@@ -349,8 +408,16 @@ export class Compiler {
   identifier(node) {
     const { name, line } = node;
     const info = this.lookup(name);
-    if (info) return this.variable(info, line);
-    if (this.funcs.has(name) || BUILTINS[name]) return { t: T.void, fnName: name };
+    if (info) {
+      if (info.enumConst !== undefined) {
+        const v = info.enumConst;
+        return { t: T.int, ev: () => v, cv: v };
+      }
+      return this.variable(info, line);
+    }
+    const fi = this.funcs.get(name);
+    if (fi) return { t: fi.type, ev: () => fi.ref, fnName: name };
+    if (BUILTINS[name]) return { t: T.void, builtinName: name };
     if (name === "true" || name === "false") {
       this.needHeader("stdbool.h", name, line);
       const v = name === "true" ? 1 : 0;
@@ -362,7 +429,8 @@ export class Compiler {
     }
     if (name === "stdin" || name === "stdout" || name === "stderr") {
       this.needHeader("stdio.h", name, line);
-      return { t: FILE_T, ev: () => name };
+      const stream = { stdin: STDIN, stdout: STDOUT, stderr: STDERR }[name];
+      return { t: FILE_T, ev: () => stream };
     }
     const names = [...this.visibleNames(), ...this.funcs.keys()];
     throw compileError(line, `'${name}'라는 변수를 찾을 수 없어요`,
@@ -378,24 +446,86 @@ export class Compiler {
       const st = info.store;
       const p = new Ptr(st, 0);
       const E = { t: type, lv: () => p, varName: name };
-      if (!isArr(type)) {
+      if (isScalar(type)) {
         E.ev = () => { const v = st.cells[0]; if (v === undefined) throw uninit(); return v; };
         E.set = (f, v) => { st.cells[0] = v; };
       }
-      return E;
+      return this.withLoad(E, line);
     }
     const slot = info.slot;
     const E = { t: type, lv: (f) => new Ptr(f[slot], 0), varName: name };
-    if (!isArr(type)) {
+    if (isScalar(type)) {
       E.ev = (f) => { const v = f[slot].cells[0]; if (v === undefined) throw uninit(); return v; };
       E.set = (f, v) => { f[slot].cells[0] = v; };
+    }
+    return this.withLoad(E, line);
+  }
+
+  /** 주소(lv)로 값을 읽는 방법을 붙여요. 구조체는 전체를 복사해서 읽어요. */
+  withLoad(E, line) {
+    if (E.ev || isArr(E.t) || isFunc(E.t)) return E;
+    const rt = this.rt;
+    const lv = E.lv;
+    if (isStruct(E.t)) {
+      const n = cells(this.layout(E.t, line));
+      E.ev = (f) => rt.loadStruct(lv(f), n, line);
+    } else {
+      E.ev = (f) => rt.load(lv(f), line);
     }
     return E;
   }
 
+  member(node) {
+    const { line } = node;
+    const rt = this.rt;
+    const base = this.expr(node.e);
+    const where = node.e.k === "id" ? node.e.name : "이 값";
+    let st;
+    let lvBase;
+    if (node.arrow) {
+      const V = this.value(base, line);
+      if (!isPtr(V.t) || !isStruct(V.t.to)) {
+        if (isStruct(V.t)) throw compileError(line, "구조체 변수에는 -> 대신 . 을 써요", `예: ${where}.${node.name}`);
+        throw compileError(line, "-> 는 구조체 포인터에만 쓸 수 있어요", `${where}는 ${friendlyType(V.t)}예요.`);
+      }
+      st = this.layout(V.t.to, line);
+      lvBase = (f) => { const p = V.ev(f); if (p === null) rt.check(null, line, false); return p; };
+    } else {
+      if (isPtr(base.t) && isStruct(base.t.to)) {
+        throw compileError(line, "구조체 포인터에는 . 대신 -> 를 써요", `예: ${where}->${node.name}  (또는 (*${where}).${node.name})`);
+      }
+      if (!isStruct(base.t)) throw compileError(line, `'.${node.name}'는 구조체에만 쓸 수 있어요`, `${where}는 ${friendlyType(base.t)}예요.`);
+      st = this.layout(base.t, line);
+      if (base.lv) lvBase = base.lv;
+      else {
+        // 함수가 돌려준 구조체처럼 이름 없는 값: 잠깐 쓸 칸을 만들어요
+        const ev = base.ev;
+        lvBase = (f) => {
+          const tmp = new Store(cells(st), "임시 값", st);
+          tmp.cells = ev(f).slice();
+          return new Ptr(tmp, 0);
+        };
+      }
+    }
+    const field = st.fields.find((x) => x.name === node.name);
+    if (!field) {
+      const names = st.fields.map((x) => x.name);
+      throw compileError(line, `${typeName(st)}에는 '${node.name}' 멤버가 없어요`,
+        `있는 멤버: ${names.join(", ")}.${suggest(node.name, names)}`);
+    }
+    const off = field.off;
+    const E = {
+      t: field.type,
+      lv: (f) => { const p = lvBase(f); return new Ptr(p.store, p.off + off); },
+      varName: `${where}${node.arrow ? "->" : "."}${node.name}`,
+    };
+    return this.withLoad(E, line);
+  }
+
   ptrArith(P, I, sign, line) {
-    const elem = P.t.to;
+    const elem = this.need(P.t.to, line);
     if (isVoid(elem)) throw compileError(line, "void* 로는 주소 계산을 할 수 없어요", "먼저 (int *) 처럼 알맞은 타입으로 바꿔 주세요.");
+    if (isFunc(elem)) throw compileError(line, "함수 포인터로는 주소 계산을 할 수 없어요");
     const stride = cells(elem);
     const rt = this.rt;
     return {
@@ -439,6 +569,9 @@ export class Compiler {
         }
         const cmp = ptrCompare(op, line);
         return { t: T.int, ev: (f) => cmp(L.ev(f), R.ev(f)) };
+      }
+      if (isStruct(L.t) || isStruct(R.t)) {
+        throw compileError(line, `구조체는 ${op} 로 한 번에 비교할 수 없어요`, "멤버를 하나씩 비교해 주세요. 예: a.x == b.x && a.y == b.y");
       }
       throw compileError(line, `${friendlyType(L.t)}와 ${friendlyType(R.t)}는 비교할 수 없어요`);
     }
@@ -510,6 +643,14 @@ export class Compiler {
     }
     if (L.t.k === "file") throw compileError(line, "FILE에는 값을 넣을 수 없어요");
     const what = L.varName ? `'${L.varName}'에 넣는 값` : "넣는 값";
+    if (isStruct(L.t)) {
+      if (node.op !== "=") throw compileError(line, `구조체에는 '${node.op}' 계산을 쓸 수 없어요`, "멤버에 하나씩 계산해 주세요.");
+      const R = this.value(this.expr(node.r), line);
+      if (!sameType(R.t, L.t)) {
+        throw compileError(line, "구조체 타입이 달라서 넣을 수 없어요", `${typeName(L.t)}에 ${typeName(R.t)}를 넣으려고 했어요.`);
+      }
+      return { t: L.t, ev: (f) => { const p = L.lv(f); const v = R.ev(f); rt.storeStruct(p, v, line); return v; } };
+    }
     if (node.op === "=") {
       const R = this.conv(this.value(this.expr(node.r), line), L.t, line, what);
       if (L.set) {
@@ -540,7 +681,8 @@ export class Compiler {
     const rt = this.rt;
     if (op === "&") {
       const E = this.expr(node.e);
-      if (E.fnName) throw compileError(line, "함수의 주소(함수 포인터)는 아직 지원하지 않아요");
+      if (E.builtinName) throw compileError(line, `표준 함수 '${E.builtinName}'의 주소는 쓸 수 없어요`);
+      if (isFunc(E.t)) return { t: ptr(E.t), ev: E.ev, fnName: E.fnName };
       if (!E.lv) throw compileError(line, "숫자나 계산 결과에는 &를 붙일 수 없어요", "&는 변수나 배열 칸 앞에 붙여서 그 주소를 구해요.");
       return { t: ptr(E.t), ev: E.lv };
     }
@@ -549,12 +691,11 @@ export class Compiler {
       if (!isPtr(P.t)) {
         throw compileError(line, "'*'는 주소(포인터) 앞에만 쓸 수 있어요", `${friendlyType(P.t)} 앞에 *를 붙였어요. 곱하기라면 양쪽에 값이 있는지 확인해 보세요.`);
       }
+      if (isFunc(P.t.to)) return { t: P.t.to, ev: P.ev };
       if (isVoid(P.t.to)) throw compileError(line, "void* 가 가리키는 값은 바로 읽을 수 없어요", "먼저 (int *) 처럼 알맞은 타입으로 바꿔 주세요.");
       if (P.t.to.k === "file") throw compileError(line, "FILE 안의 값은 읽을 수 없어요");
       const lv = (f) => P.ev(f);
-      const E = { t: P.t.to, lv };
-      if (!isArr(E.t)) E.ev = (f) => rt.load(lv(f), line);
-      return E;
+      return this.withLoad({ t: this.need(P.t.to, line), lv }, line);
     }
     const E = this.value(this.expr(node.e), line);
     if (op === "!") {
@@ -590,7 +731,7 @@ export class Compiler {
     let step;
     if (isPtr(t)) {
       if (isVoid(t.to)) throw compileError(line, "void* 로는 주소 계산을 할 수 없어요");
-      const stride = cells(t.to);
+      const stride = cells(this.need(t.to, line));
       step = (v) => { if (v === null) rt.check(null, line, false); return new Ptr(v.store, v.off + d * stride); };
     } else if (is64(t)) step = (v) => convert(v + BigInt(d), t, t);
     else if (isFloat(t)) step = (v) => convert(v + d, t, t);
@@ -629,8 +770,9 @@ export class Compiler {
     if (!isInt(I.t)) {
       throw compileError(line, "배열 번호는 정수여야 해요", isFloat(I.t) ? "실수를 번호로 쓰려면 (int)를 붙여 정수로 바꿔 주세요." : "");
     }
-    const elem = B.t.to;
+    const elem = this.need(B.t.to, line);
     if (isVoid(elem)) throw compileError(line, "void* 에는 [ ]를 쓸 수 없어요", "먼저 알맞은 타입의 포인터로 바꿔 주세요.");
+    if (isFunc(elem)) throw compileError(line, "함수 포인터에는 [ ]를 쓸 수 없어요");
     const stride = cells(elem);
     const lv = (f) => {
       const p = B.ev(f);
@@ -638,8 +780,7 @@ export class Compiler {
       return new Ptr(p.store, p.off + Number(I.ev(f)) * stride);
     };
     const E = { t: elem, lv };
-    if (!isArr(elem)) E.ev = (f) => rt.load(lv(f), line);
-    return E;
+    return this.withLoad(E, line);
   }
 
   cast(node) {
@@ -652,7 +793,10 @@ export class Compiler {
     if (isPtr(to)) {
       if (E.isNull) return { t: to, ev: () => null, isNull: true, cv: null };
       if (isPtr(E.t)) {
-        if (isVoid(E.t.to) && !isVoid(to.to)) return { t: to, ev: (f) => retypeHeap(E.ev(f), to.to, line) };
+        if (isVoid(E.t.to) && !isVoid(to.to) && !isFunc(to.to)) {
+          const target = this.need(to.to, line);
+          return { t: to, ev: (f) => retypeHeap(E.ev(f), target, line) };
+        }
         return { t: to, ev: E.ev };
       }
       throw compileError(line, "정수를 주소(포인터)로 바꾸는 건 지원하지 않아요");
@@ -665,44 +809,63 @@ export class Compiler {
   // ---------- 함수 호출 ----------
   call(node) {
     const { line } = node;
-    if (node.callee.k !== "id") throw compileError(line, "함수는 이름으로만 부를 수 있어요");
-    const name = node.callee.name;
-    const info = this.lookup(name);
-    if (info) throw compileError(line, `'${name}'는 함수가 아니라 변수예요`, "변수 뒤에는 ( )를 붙일 수 없어요.");
-    const user = this.funcs.get(name);
-    if (user) return this.callUser(user, node);
-    const b = BUILTINS[name];
-    if (b) return this.callBuiltin(name, b, node);
-    const all = [...this.funcs.keys(), ...Object.keys(BUILTINS).filter((n) => this.hasHeader(BUILTINS[n].header))];
-    throw compileError(line, `'${name}' 함수를 찾을 수 없어요`,
-      `함수를 만들었는지, 이름이 맞는지 확인해 보세요.${suggest(name, all)}`);
+    if (node.callee.k === "id") {
+      const name = node.callee.name;
+      const info = this.lookup(name);
+      if (!info) {
+        const user = this.funcs.get(name);
+        if (user) return this.callUser(user, node);
+        const b = BUILTINS[name];
+        if (b) return this.callBuiltin(name, b, node);
+        const all = [...this.funcs.keys(), ...Object.keys(BUILTINS).filter((n) => this.hasHeader(BUILTINS[n].header))];
+        throw compileError(line, `'${name}' 함수를 찾을 수 없어요`,
+          `함수를 만들었는지, 이름이 맞는지 확인해 보세요.${suggest(name, all)}`);
+      }
+    }
+    // 함수 포인터로 부르기: fp(1, 2), (*fp)(1, 2), ops[i](1, 2)
+    const C = this.value(this.expr(node.callee), line);
+    if (!isFuncPtr(C.t)) {
+      const name = node.callee.k === "id" ? `'${node.callee.name}'는` : "이 값은";
+      throw compileError(line, `${name} 함수가 아니라서 ( )를 붙일 수 없어요`, `${friendlyType(C.t)}예요.`);
+    }
+    const ftype = C.t.to;
+    const getRef = C.ev;
+    const rt = this.rt;
+    return this.callWith(ftype, node, "함수 포인터", (f, vals, used) => {
+      const ref = getRef(f);
+      return rt.callFn(ref, vals, line, used);
+    });
+  }
+
+  callUser(fi, node) {
+    return this.callWith(fi.type, node, fi.name, (f, vals, used) => this.invoke(fi, vals, node.line, used), fi);
+  }
+
+  callWith(ftype, node, name, run, fi = null) {
+    const { line } = node;
+    const params = ftype.params;
+    const loose = ftype.noProto && !(fi && fi.def);
+    if (!loose && node.args.length !== params.length) {
+      throw this.argCountError(name, params.length, node.args.length, line);
+    }
+    const args = node.args.map((a, i) => {
+      const E = this.value(this.expr(a), line);
+      return params[i] ? this.conv(E, params[i].type, line, `'${name}'의 ${i + 1}번째 값`) : E;
+    }).map((E) => E.ev);
+    const used = !node.unused;
+    const n = args.length;
+    return {
+      t: ftype.ret,
+      ev: (f) => {
+        const vals = new Array(n);
+        for (let i = 0; i < n; i++) vals[i] = args[i](f);
+        return run(f, vals, used);
+      },
+    };
   }
 
   argCountError(name, need, got, line) {
     return compileError(line, `함수 '${name}'에는 값 ${need}개가 필요한데 ${got}개를 넣었어요`);
-  }
-
-  callUser(fi, node) {
-    const { line } = node;
-    const params = fi.type.params;
-    if (!(fi.type.noProto && !fi.def) && node.args.length !== params.length) {
-      throw this.argCountError(fi.name, params.length, node.args.length, line);
-    }
-    const args = node.args.map((a, i) => {
-      const E = this.value(this.expr(a), line);
-      return params[i] ? this.conv(E, params[i].type, line, `'${fi.name}'의 ${i + 1}번째 값`) : E;
-    }).map((E) => E.ev);
-    const used = !node.unused;
-    const n = args.length;
-    const self = this;
-    return {
-      t: fi.type.ret,
-      ev: (f) => {
-        const vals = new Array(n);
-        for (let i = 0; i < n; i++) vals[i] = args[i](f);
-        return self.invoke(fi, vals, line, used);
-      },
-    };
   }
 
   invoke(fi, vals, line, used) {
@@ -715,8 +878,9 @@ export class Compiler {
     const frame = new Array(fi.slotCount);
     for (let i = 0; i < fi.params.length; i++) {
       const p = fi.params[i];
-      const st = new Store(1, p.name, p.type);
-      st.cells[0] = vals[i];
+      const st = new Store(p.cells, p.name, p.type);
+      if (p.cells === 1) st.cells[0] = vals[i];
+      else st.cells = vals[i].slice(); // 구조체는 복사해서 넘겨요
       frame[p.slot] = st;
     }
     rt.stack.push({ fi, frame });
@@ -761,6 +925,10 @@ export class Compiler {
       const t = E.t;
       const c = spec.conv;
       const pos = `${i + 1}번째 값`;
+      if (isStruct(t)) {
+        throw compileError(line, `구조체는 ${name}로 한 번에 ${kind === "printf" ? "출력" : "입력"}할 수 없어요`,
+          `멤버를 하나씩 써 주세요. 예: ${E.varName || "p"}.멤버 (${pos})`);
+      }
       if (kind === "printf") {
         if (star) {
           if (!isInt(t)) throw compileError(line, `${name}의 * 자리에는 정수가 와야 해요`);
@@ -852,7 +1020,9 @@ export class Compiler {
       if (i < nfixed) {
         const pt = b.params[i];
         if (pt === FILE_T) {
-          if (E.t !== FILE_T) throw compileError(line, `${name}의 ${i + 1}번째 값에는 stdin을 써요`);
+          if (!isPtr(E.t) || E.t.to.k !== "file") {
+            throw compileError(line, `${name}의 ${i + 1}번째 값에는 파일(FILE *)이 와야 해요`, "fopen으로 연 파일이나 stdin, stdout을 넣어요.");
+          }
           return E;
         }
         return this.conv(E, pt, line, `'${name}'의 ${i + 1}번째 값`);
@@ -877,38 +1047,60 @@ export class Compiler {
   }
 
   // ---------- 초기화 ----------
+  constIndex(node, line) {
+    const E = this.value(this.expr(node), line);
+    if (E.cv === undefined || !isInt(E.t)) throw compileError(line, "[번호] = 의 번호는 정수 상수여야 해요");
+    return Number(E.cv);
+  }
+
   initLength(type, init) {
     if (!isArr(type) || type.lenExpr !== null || !init) return null;
     if (init.k === "str") return init.bytes.length + 1;
     if (init.k !== "initlist") return null;
     const items = init.items;
-    if (type.of.k === "array" && items.length && items.every((x) => x.k !== "initlist" && x.k !== "str")) {
+    if (type.of.k === "array" && items.length && items.every((x) => x.k !== "initlist" && x.k !== "str" && x.k !== "desig")) {
       const inner = this.resolveType(type.of);
       return Math.ceil(items.length / cells(inner));
     }
-    return items.length;
+    let idx = 0;
+    let max = 0;
+    for (const x of items) {
+      if (x.k === "desig" && x.index) idx = this.constIndex(x.index, x.line);
+      idx++;
+      max = Math.max(max, idx);
+    }
+    return max;
   }
 
   /** 처음 값 넣기: (frame, store) => void 를 돌려줘요. */
   initializer(type, init, line, name) {
     if (!init) return null;
-    if (isArr(type)) {
-      const total = cells(type);
-      const zero = zeroOf(baseOf(type));
+    if (isArr(type) || (isStruct(type) && init.k === "initlist")) {
+      // 묶음(배열, 구조체): 먼저 모두 0으로 채우고, 적힌 값만 넣어요 (C 규칙)
+      const zeros = zerosOf(type);
       const entries = [];
-      this.flatten(type, init, 0, entries, line, name);
+      this.place(type, init, 0, entries, line, name);
       return (f, st) => {
-        st.cells.fill(zero, 0, total);
-        for (let i = 0; i < entries.length; i++) st.cells[entries[i].off] = entries[i].ev(f);
+        for (let i = 0; i < zeros.length; i++) st.cells[i] = zeros[i];
+        for (const e of entries) {
+          if (e.n) {
+            const v = e.ev(f);
+            for (let k = 0; k < e.n; k++) st.cells[e.off + k] = v[k];
+          } else st.cells[e.off] = e.ev(f);
+        }
       };
     }
-    let node = init;
-    if (init.k === "initlist") {
-      if (init.items.length !== 1) throw compileError(line, `'${name}'는 값이 하나라서 { } 안에 하나만 넣을 수 있어요`);
-      node = init.items[0];
+    if (isStruct(type)) {
+      const E = this.conv(this.value(this.expr(init), line), type, line, `'${name}'의 처음 값`);
+      return (f, st) => {
+        const v = E.ev(f);
+        for (let k = 0; k < v.length; k++) st.cells[k] = v[k];
+      };
     }
-    const E = this.conv(this.value(this.charHint(this.expr(node), node), line), type, line, `'${name}'의 처음 값`);
-    return (f, st) => { st.cells[0] = E.ev(f); };
+    const entries = [];
+    this.place(type, init, 0, entries, line, name);
+    const ev = entries[0].ev;
+    return (f, st) => { st.cells[0] = ev(f); };
   }
 
   charHint(E, node) {
@@ -916,7 +1108,49 @@ export class Compiler {
     return E;
   }
 
-  flatten(type, init, base, entries, line, name) {
+  /** 처음 값 하나를 off 위치에 놓아요. */
+  place(type, init, off, entries, line, name) {
+    if (isArr(type)) return this.flattenArray(type, init, off, entries, line, name);
+    if (isStruct(type)) {
+      if (init.k === "initlist") return this.flattenStruct(type, init, off, entries, line, name);
+      const E = this.conv(this.value(this.expr(init), line), type, line, `'${name}'의 처음 값`);
+      entries.push({ off, ev: E.ev, n: cells(type) });
+      return undefined;
+    }
+    let node = init;
+    if (init.k === "initlist") {
+      if (init.items.length !== 1) throw compileError(line, `'${name}'는 값이 하나라서 { } 안에 하나만 넣을 수 있어요`);
+      node = init.items[0];
+    }
+    if (node.k === "desig" || node.k === "initlist") throw compileError(line, `'${name}'의 처음 값 모양이 맞지 않아요`);
+    const E = this.conv(this.value(this.charHint(this.expr(node), node), line), type, line, `'${name}'의 처음 값`);
+    entries.push({ off, ev: E.ev });
+    return undefined;
+  }
+
+  flattenStruct(st, init, base, entries, line, name) {
+    this.layout(st, line);
+    let fi = 0;
+    for (let x of init.items) {
+      if (x.k === "desig") {
+        if (x.field == null) throw compileError(line, "구조체에는 [번호] = 를 쓸 수 없어요", "멤버 이름으로 .이름 = 값 처럼 써요.");
+        fi = st.fields.findIndex((f) => f.name === x.field);
+        if (fi < 0) {
+          const names = st.fields.map((f) => f.name);
+          throw compileError(line, `${typeName(st)}에는 '${x.field}' 멤버가 없어요`, `있는 멤버: ${names.join(", ")}.${suggest(x.field, names)}`);
+        }
+        x = x.init;
+      }
+      if (fi >= st.fields.length) {
+        throw compileError(line, `'${name}'의 처음 값이 멤버 수(${st.fields.length}개)보다 많아요`);
+      }
+      const f = st.fields[fi];
+      this.place(f.type, x, base + f.off, entries, line, `${name}.${f.name}`);
+      fi++;
+    }
+  }
+
+  flattenArray(type, init, base, entries, line, name) {
     if (init.k === "str") {
       if (!isCharLike(type.of)) throw compileError(line, `'${name}'는 글자 배열이 아니라서 문자열로 처음 값을 넣을 수 없어요`);
       if (init.bytes.length > type.len) {
@@ -935,7 +1169,7 @@ export class Compiler {
     const items = init.items;
     const elem = type.of;
     const elemCells = cells(elem);
-    if (isArr(elem) && items.every((x) => x.k !== "initlist" && x.k !== "str")) {
+    if (isArr(elem) && items.every((x) => x.k !== "initlist" && x.k !== "str" && x.k !== "desig")) {
       // 중괄호를 생략한 2차원 배열: 차례대로 채워요
       if (items.length > cells(type)) throw compileError(line, `배열 '${name}'에 처음 값이 너무 많아요`);
       const scalar = baseOf(type);
@@ -945,24 +1179,40 @@ export class Compiler {
       });
       return;
     }
-    if (items.length > type.len) {
-      throw compileError(line, `배열 '${name}'에 처음 값이 너무 많아요`, `배열은 ${type.len}칸인데 값은 ${items.length}개예요.`);
-    }
-    items.forEach((x, i) => {
-      const off = base + i * elemCells;
-      if (isArr(elem)) {
-        this.flatten(elem, x, off, entries, line, name);
-      } else {
-        if (x.k === "initlist") throw compileError(line, `'${name}'의 처음 값에 { }가 너무 많아요`);
-        const E = this.conv(this.value(this.charHint(this.expr(x), x), line), elem, line, `'${name}'의 처음 값`);
-        entries.push({ off, ev: E.ev });
+    let idx = 0;
+    for (let x of items) {
+      if (x.k === "desig") {
+        if (x.index == null) throw compileError(line, "배열에는 .이름 = 을 쓸 수 없어요", "번호로 [2] = 값 처럼 써요.");
+        idx = this.constIndex(x.index, line);
+        x = x.init;
       }
-    });
+      if (idx < 0 || idx >= type.len) {
+        throw compileError(line, `배열 '${name}'에 처음 값이 너무 많아요`, `배열은 ${type.len}칸이에요.`);
+      }
+      this.place(elem, x, base + idx * elemCells, entries, line, `${name}[${idx}]`);
+      idx++;
+    }
   }
 
   // ---------- 선언 ----------
+  declareEnums(defs) {
+    for (const def of defs || []) {
+      let next = 0;
+      for (const item of def.items) {
+        if (item.expr) {
+          const E = this.value(this.expr(item.expr), item.line);
+          if (E.cv === undefined || !isInt(E.t)) throw compileError(item.line, `enum '${item.name}'의 값은 정수 상수여야 해요`);
+          next = Number(E.cv);
+        }
+        this.declare({ name: item.name, enumConst: next, type: T.int, line: item.line });
+        next++;
+      }
+    }
+  }
+
   declaration(node, global) {
     const closures = [];
+    this.declareEnums(node.enums);
     for (const item of node.items) {
       if (item.type.k === "func") {
         if (!global) throw compileError(item.line, "함수 안에서 다른 함수를 선언할 수 없어요", "함수 선언은 main 위쪽에 써 주세요.");
@@ -974,7 +1224,8 @@ export class Compiler {
       if (type.vla && item.init) throw compileError(item.line, "크기가 변하는 배열에는 처음 값을 넣을 수 없어요");
       const size = cells(type);
       if (global || item.storage === "static") {
-        const st = new Store(size, item.name, type, zeroOf(baseOf(type)));
+        const st = new Store(size, item.name, type);
+        st.cells = zerosOf(type).slice();
         const info = { name: item.name, type, store: st, line: item.line, global };
         this.declare(info);
         if (global) this.globals.push(info);
@@ -1029,6 +1280,7 @@ export class Compiler {
       return old;
     }
     const fi = { name, type, def, line, body: null, slotCount: 0, locals: [], params: [] };
+    fi.ref = new FnRef(fi);
     this.funcs.set(name, fi);
     return fi;
   }
@@ -1043,7 +1295,7 @@ export class Compiler {
     def.type.params.forEach((p, i) => {
       if (!p.name) throw compileError(def.line, `함수 '${fi.name}'의 ${i + 1}번째 매개변수에 이름이 필요해요`);
       const type = fi.type.params[i].type;
-      const info = { name: p.name, type, slot: fi.slotCount++, line: p.line };
+      const info = { name: p.name, type, slot: fi.slotCount++, line: p.line, cells: cells(this.need(type, p.line)) };
       this.declare(info);
       fi.locals.push(info);
       fi.params.push(info);
@@ -1243,6 +1495,7 @@ export class Compiler {
 
   // ---------- 프로그램 ----------
   compile(ast) {
+    this.rt.invoke = (fi, vals, line, used) => this.invoke(fi, vals, line, used);
     // 함수 이름을 먼저 모두 등록해서, 뒤에 만든 함수도 부를 수 있게 해요.
     for (const item of ast.items) {
       if (item.k === "func") this.declareFunction(item, item);

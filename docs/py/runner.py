@@ -152,6 +152,8 @@ def run(code, answers_json, seed, mode, bridge):
                 value = answers.pop(0)
                 if not answers:
                     out.muted = err.muted = False
+                if value is None:  # 화면에서 "입력 끝(EOF)"을 보냈어요
+                    raise EOFError("EOF when reading a line")
                 return value
             bridge.post_input_request(prompt)
             out.muted = err.muted = True

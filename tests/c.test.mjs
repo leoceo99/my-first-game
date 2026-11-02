@@ -326,3 +326,251 @@ test("큰 반복문도 빠르게", () => {
   assert.equal(r.out, "5999995\n");
   assert.ok(Date.now() - start < 5000, `너무 느려요: ${Date.now() - start}ms`);
 });
+
+// ---------- 구조체, typedef, enum, 함수 포인터, 전처리기, 파일, EOF ----------
+test("구조체: 멤버, 배열, 복사, 함수 인자/반환, 지정 초기화", () => {
+  const r = run(`#include <stdio.h>
+#include <string.h>
+typedef struct {
+    char name[20];
+    int score;
+} Student;
+struct Point { int x, y; };
+struct Line { struct Point a, b; };
+Student make(const char *n, int s) { Student t; strcpy(t.name, n); t.score = s; return t; }
+void bump(Student *s) { s->score += 5; }
+void noChange(Student s) { s.score = 0; }
+int main(void) {
+    Student list[3] = {{"Kim", 80}, {.score = 95, .name = "Lee"}, {"Park"}};
+    list[2] = make("Choi", 88);
+    bump(&list[0]);
+    noChange(list[1]);
+    Student copy = list[0];
+    copy.score = 1;
+    struct Line ln = {{1, 2}, {.y = 9}};
+    struct Point *pp = &ln.b;
+    pp->x = 7;
+    printf("%s %d / %s %d / %s %d / %d\\n", list[0].name, list[0].score, list[1].name, list[1].score, list[2].name, list[2].score, copy.score);
+    printf("%d %d %d %d %d\\n", ln.a.x, ln.a.y, ln.b.x, (*pp).y, (int)sizeof(struct Point));
+    printf("%d\\n", make("X", 42).score);
+    return 0;
+}`);
+  assert.equal(r.status, "ok", JSON.stringify(r.error));
+  assert.equal(r.out, "Kim 85 / Lee 95 / Choi 88 / 1\n1 2 7 9 8\n42\n");
+  const vars = Object.fromEntries(r.variables.map((v) => [v.name, v]));
+  assert.equal(vars.copy.value, '{name: "Kim", score: 1}');
+  assert.equal(vars.copy.type, "Student");
+  assert.equal(vars.pp.value, "→ ln.b");
+});
+
+test("연결 리스트 (malloc + 구조체 포인터)", () => {
+  const r = run(`#include <stdio.h>
+#include <stdlib.h>
+typedef struct Node {
+    int value;
+    struct Node *next;
+} Node;
+Node *push(Node *head, int v) {
+    Node *n = (Node *)malloc(sizeof(Node));
+    n->value = v;
+    n->next = head;
+    return n;
+}
+int main(void) {
+    Node *head = NULL;
+    for (int i = 1; i <= 4; i++) head = push(head, i * 10);
+    int sum = 0;
+    for (Node *c = head; c != NULL; c = c->next) { printf("%d ", c->value); sum += c->value; }
+    printf("| %d\\n", sum);
+    while (head != NULL) { Node *next = head->next; free(head); head = next; }
+    return 0;
+}`);
+  assert.equal(r.status, "ok", JSON.stringify(r.error));
+  assert.equal(r.out, "40 30 20 10 | 100\n");
+});
+
+test("enum과 switch", () => {
+  const r = run(`#include <stdio.h>
+typedef enum { MON, TUE, WED = 10, THU } Day;
+int main(void) {
+    Day d = THU;
+    switch (d) {
+        case MON: printf("월\\n"); break;
+        case THU: printf("목 %d %d %d\\n", MON, TUE, THU); break;
+        default: printf("?\\n");
+    }
+    return 0;
+}`);
+  assert.equal(r.out, "목 0 1 11\n");
+});
+
+test("함수 포인터와 qsort, bsearch", () => {
+  const r = run(`#include <stdio.h>
+#include <stdlib.h>
+int add(int a, int b) { return a + b; }
+int sub(int a, int b) { return a - b; }
+int apply(int (*op)(int, int), int x, int y) { return op(x, y); }
+int asc(const void *a, const void *b) { return *(const int *)a - *(const int *)b; }
+typedef int (*Op)(int, int);
+int main(void) {
+    Op ops[] = {add, sub};
+    int (*f)(int, int) = &sub;
+    printf("%d %d %d %d\\n", apply(add, 2, 3), ops[1](9, 4), (*f)(1, 5), f == sub);
+    int nums[6] = {42, 7, 19, 3, 88, 25};
+    qsort(nums, 6, sizeof(int), asc);
+    for (int i = 0; i < 6; i++) printf("%d ", nums[i]);
+    int key = 19;
+    int *found = bsearch(&key, nums, 6, sizeof(nums[0]), asc);
+    printf("| %ld\\n", found - nums);
+    return 0;
+}`);
+  assert.equal(r.status, "ok", JSON.stringify(r.error));
+  assert.equal(r.out, "5 5 -4 1\n3 7 19 25 42 88 | 2\n");
+});
+
+test("복잡한 선언: 배열 포인터, 문자열 배열, 2차원 배열 매개변수", () => {
+  const r = run(`#include <stdio.h>
+int total(int m[][3], int rows) {
+    int s = 0;
+    for (int i = 0; i < rows; i++) for (int j = 0; j < 3; j++) s += m[i][j];
+    return s;
+}
+int main(void) {
+    int grid[2][3] = {{1, 2, 3}, {4, 5, 6}};
+    int (*row)[3] = grid;
+    const char *names[] = {"하나", "둘", "셋"};
+    printf("%d %d %s %d\\n", total(grid, 2), row[1][2], names[2], (int)(sizeof(names) / sizeof(names[0])));
+    return 0;
+}`);
+  assert.equal(r.status, "ok", JSON.stringify(r.error));
+  assert.equal(r.out, "21 6 셋 3\n");
+});
+
+test("전처리기 조건문", () => {
+  const r = run(`#include <stdio.h>
+#define LEVEL 2
+#define DEBUG
+int main(void) {
+#ifdef DEBUG
+    printf("D");
+#endif
+#ifndef DEBUG
+    printf("X");
+#endif
+#if LEVEL > 2
+    printf("A");
+#elif LEVEL == 2 && defined(DEBUG)
+    printf("B");
+#else
+    printf("C");
+#endif
+#if 0
+    이 줄은 무시돼요
+#endif
+    printf("\\n");
+    return 0;
+}`);
+  assert.equal(r.status, "ok", JSON.stringify(r.error));
+  assert.equal(r.out, "DB\n");
+});
+
+test("파일 쓰기와 읽기 (가상 파일)", () => {
+  const r = run(`#include <stdio.h>
+int main(void) {
+    FILE *fp = fopen("data.txt", "w");
+    if (fp == NULL) return 1;
+    for (int i = 1; i <= 3; i++) fprintf(fp, "%d %d\\n", i, i * i);
+    fclose(fp);
+    fp = fopen("data.txt", "a");
+    fputs("4 16\\n", fp);
+    fclose(fp);
+    fp = fopen("data.txt", "r");
+    int a, b, sum = 0;
+    while (fscanf(fp, "%d %d", &a, &b) == 2) sum += b;
+    fclose(fp);
+    char line[50];
+    fp = fopen("data.txt", "r");
+    fgets(line, sizeof(line), fp);
+    fclose(fp);
+    printf("%d %s", sum, line);
+    printf("%s\\n", fopen("없는파일.txt", "r") == NULL ? "NULL" : "?");
+    return 0;
+}`);
+  assert.equal(r.status, "ok", JSON.stringify(r.error));
+  assert.equal(r.out, "30 1 1\nNULL\n");
+  assert.deepEqual(r.files, { "data.txt": "1 1\n2 4\n3 9\n4 16\n" });
+});
+
+test("미리 있던 파일을 읽어요", () => {
+  const out = [];
+  const res = runC(`#include <stdio.h>
+int main(void) {
+    FILE *fp = fopen("memo.txt", "r");
+    char buf[30];
+    while (fgets(buf, sizeof(buf), fp) != NULL) printf("> %s", buf);
+    fclose(fp);
+    return 0;
+}`, { files: { "memo.txt": "첫 줄\n둘째 줄\n" }, onOutput: (t) => out.push(t) });
+  assert.equal(res.status, "ok");
+  assert.equal(out.join(""), "> 첫 줄\n> 둘째 줄\n");
+});
+
+test("입력 끝(EOF): getchar와 scanf", () => {
+  let r = run(`#include <stdio.h>
+int main(void) {
+    int c, lines = 0, chars = 0;
+    while ((c = getchar()) != EOF) { chars++; if (c == '\\n') lines++; }
+    printf("%d줄 %d글자\\n", lines, chars);
+    return 0;
+}`, ["ab", "cde", null]);
+  assert.equal(r.out, "2줄 7글자\n");
+  r = run(`#include <stdio.h>
+int main(void) {
+    int x, sum = 0;
+    while (scanf("%d", &x) != EOF) sum += x;
+    printf("합 %d\\n", sum);
+    return 0;
+}`, ["1 2", "3", null]);
+  assert.equal(r.out, "합 6\n");
+});
+
+test("strtok, memcpy, strrchr, snprintf", () => {
+  const r = run(C(`
+    char text[] = "사과,배,,포도";
+    int n = 0;
+    for (char *t = strtok(text, ","); t != NULL; t = strtok(NULL, ",")) { printf("[%s]", t); n++; }
+    int a[3] = {1, 2, 3}, b[3];
+    memcpy(b, a, sizeof(a));
+    char path[] = "a/b/c.txt";
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%d-%s", 12345, "abc");
+    printf(" %d %d %s %s\\n", n, b[2], strrchr(path, '/') + 1, buf);`, "#include <stdio.h>\n#include <string.h>\n"));
+  assert.equal(r.status, "ok", JSON.stringify(r.error));
+  assert.equal(r.out, "[사과][배][포도] 3 3 c.txt 12345-a\n");
+});
+
+test("구조체·포인터·파일 실수 안내", () => {
+  const S = "#include <stdio.h>\nstruct P { int x; int y; };\n";
+  assert.match(error(`${S}int main(void) { struct P p; struct P *q = &p; q.x = 1; return 0; }`).title, /-> 를 써요/);
+  assert.match(error(`${S}int main(void) { struct P p; p->x = 1; return 0; }`).title, /\. 을 써요/);
+  const e = error(`${S}int main(void) { struct P p; p.z = 1; return 0; }`);
+  assert.match(e.title, /'z' 멤버가 없어요/);
+  assert.match(e.detail, /x, y/);
+  assert.match(error(`${S}int main(void) { struct P a = {1, 2}, b = a; if (a == b) {} return 0; }`).title, /구조체는 == 로/);
+  assert.match(error(`${S}int main(void) { struct P a = {1, 2}; printf("%d", a); return 0; }`).title, /구조체는 printf로/);
+  assert.match(error(`${S}int main(void) { struct P a; printf("%d", a.x); return 0; }`).title, /값을 넣지 않은 'a\.x'/);
+  assert.match(error("struct Q;\nint main(void) { struct Q q; return 0; }").title, /내용이 아직 정의되지 않았어요/);
+  assert.match(error("int main(void) { int (*f)(int) = 0; return f(1); }").title, /아무 함수도 가리키지 않아요/);
+  assert.match(error("union U { int a; };\nint main(void) { return 0; }").title, /union/);
+  assert.match(error("#include <stdio.h>\nint main(void) { FILE *fp = fopen(\"x.txt\", \"r\"); fgetc(fp); return 0; }").title, /NULL 파일 포인터/);
+  assert.match(error("#include <stdio.h>\nint main(void) { FILE *fp = fopen(\"x.txt\", \"w\"); fclose(fp); fputs(\"a\", fp); return 0; }").title, /닫은 파일/);
+  assert.match(error("#include <stdio.h>\n#ifdef X\nint main(void) { return 0; }\n").title, /#endif 로 닫히지/);
+  assert.match(error(`${S}int main(void) { struct P list[2] = {{1, 2}, {3, 4}}; list[2].x = 5; return 0; }`).detail, /\[2\]에 접근/);
+});
+
+test("printf 실수 반올림은 진짜 C(glibc)와 똑같이", () => {
+  const r = run(C(`
+    printf("%.1f %.1f %.2f %.0f %.0f %.0f %.2f\\n", 2.25, 2.35, 1.005, 0.5, 1.5, 2.5, 0.125);
+    printf("%.0e %g %g %#g %.17g %f\\n", 15000.0, 1234567.0, 0.0001, 1.0, 0.1, -0.0);`));
+  assert.equal(r.out, "2.2 2.4 1.00 0 2 2 0.12\n2e+04 1.23457e+06 0.0001 1.00000 0.10000000000000001 -0.000000\n");
+});

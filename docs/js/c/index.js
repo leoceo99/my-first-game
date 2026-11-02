@@ -4,9 +4,10 @@ import { tokenize } from "./lexer.js";
 import { parse } from "./parser.js";
 import { Compiler } from "./compile.js";
 import { Runtime, NEED_INPUT, ExitSignal } from "./runtime.js";
-import { CError, runtimeError, typeName, isInt, isFloat, isArr, isPtr, isCharLike } from "./types.js";
+import { CError, runtimeError, typeName, isInt, isFloat, isArr, isPtr, isCharLike, isStruct } from "./types.js";
 
 function kindOf(t) {
+  if (isStruct(t)) return "struct";
   if (isArr(t)) return isCharLike(t.of) ? "str" : "list";
   if (isPtr(t)) return isCharLike(t.to) ? "str" : "ptr";
   if (isFloat(t)) return "float";
@@ -50,8 +51,8 @@ function errorInfo(e) {
  * C 코드를 실행해요.
  * answers: 지금까지 받은 입력들. 입력이 더 필요하면 onInput(질문)을 부르고 status "waiting"을 돌려줘요.
  */
-export function runC(source, { answers = [], startTime, onOutput = () => {}, onInput = () => {} } = {}) {
-  const rt = new Runtime({ answers, startTime, onOutput });
+export function runC(source, { answers = [], startTime, files = {}, onOutput = () => {}, onInput = () => {} } = {}) {
+  const rt = new Runtime({ answers, startTime, onOutput, files });
   const started = Date.now();
   let program = null;
   try {
@@ -67,7 +68,7 @@ export function runC(source, { answers = [], startTime, onOutput = () => {}, onI
   try {
     const code = program.run();
     rt.finish();
-    return { status: "ok", exitCode: code, seconds: seconds(), variables: collectVariables(rt, program) };
+    return { status: "ok", exitCode: code, seconds: seconds(), variables: collectVariables(rt, program), files: rt.fileTexts() };
   } catch (e) {
     if (e === NEED_INPUT) {
       onInput(rt.takePrompt());
@@ -75,7 +76,7 @@ export function runC(source, { answers = [], startTime, onOutput = () => {}, onI
     }
     rt.finish();
     if (e instanceof ExitSignal) {
-      return { status: "exit", exitCode: e.code, seconds: seconds(), variables: collectVariables(rt, program) };
+      return { status: "exit", exitCode: e.code, seconds: seconds(), variables: collectVariables(rt, program), files: rt.fileTexts() };
     }
     let err = e;
     if (e instanceof RangeError && /call stack/i.test(e.message)) {
@@ -83,6 +84,6 @@ export function runC(source, { answers = [], startTime, onOutput = () => {}, onI
     } else if (!(e instanceof CError)) {
       err = runtimeError(rt.line, "실행기 내부 오류가 났어요", `C 실행기가 아직 처리하지 못하는 코드예요. (${e && e.message})`);
     }
-    return { status: "error", error: errorInfo(err), seconds: seconds(), variables: collectVariables(rt, program), exitCode: 1 };
+    return { status: "error", error: errorInfo(err), seconds: seconds(), variables: collectVariables(rt, program), exitCode: 1, files: rt.fileTexts() };
   }
 }

@@ -202,6 +202,78 @@ function parseDefine(text, line) {
   return { name, params, body: tokens };
 }
 
+/** #if 의 조건(정수 식)을 계산해요. defined(이름), 매크로, 숫자, 계산 기호를 쓸 수 있어요. */
+function evalCondition(text, line, macros) {
+  const replaced = text.replace(/defined\s*\(\s*(\w+)\s*\)|defined\s+(\w+)/g, (m, a, b) => (macros.has(a || b) ? "1" : "0"));
+  let toks = rawTokens(replaced).tokens;
+  // 매크로를 펼치고, 모르는 이름은 0으로 봐요 (C 규칙)
+  for (let round = 0; round < 20 && toks.some((t) => t.k === "id"); round++) {
+    toks = toks.flatMap((t) => {
+      if (t.k !== "id") return [t];
+      const m = macros.get(t.v);
+      return m && !m.params ? m.body : [{ k: "num", value: 0 }];
+    });
+  }
+  let i = 0;
+  const peek = () => toks[i] || { k: "eof" };
+  const isOp = (v) => peek().k === "op" && peek().v === v;
+  const fail = () => compileError(line, "#if 의 조건을 이해할 수 없어요", "예: #if MAX > 10 또는 #if defined(DEBUG)");
+  const PREC = { "||": 1, "&&": 2, "|": 3, "^": 4, "&": 5, "==": 6, "!=": 6, "<": 7, ">": 7, "<=": 7, ">=": 7, "<<": 8, ">>": 8, "+": 9, "-": 9, "*": 10, "/": 10, "%": 10 };
+  const unary = () => {
+    const t = peek();
+    if (t.k === "num") { i++; return Number(t.value); }
+    if (isOp("(")) { i++; const v = ternary(); if (!isOp(")")) throw fail(); i++; return v; }
+    if (isOp("!")) { i++; return unary() ? 0 : 1; }
+    if (isOp("-")) { i++; return -unary(); }
+    if (isOp("+")) { i++; return unary(); }
+    if (isOp("~")) { i++; return ~unary(); }
+    throw fail();
+  };
+  const binary = (min) => {
+    let l = unary();
+    for (;;) {
+      const t = peek();
+      const p = t.k === "op" ? PREC[t.v] : undefined;
+      if (p === undefined || p < min) return l;
+      i++;
+      const r = binary(p + 1);
+      switch (t.v) {
+        case "||": l = l || r ? 1 : 0; break;
+        case "&&": l = l && r ? 1 : 0; break;
+        case "|": l |= r; break;
+        case "^": l ^= r; break;
+        case "&": l &= r; break;
+        case "==": l = l === r ? 1 : 0; break;
+        case "!=": l = l !== r ? 1 : 0; break;
+        case "<": l = l < r ? 1 : 0; break;
+        case ">": l = l > r ? 1 : 0; break;
+        case "<=": l = l <= r ? 1 : 0; break;
+        case ">=": l = l >= r ? 1 : 0; break;
+        case "<<": l <<= r; break;
+        case ">>": l >>= r; break;
+        case "+": l += r; break;
+        case "-": l -= r; break;
+        case "*": l *= r; break;
+        case "/": if (r === 0) throw compileError(line, "#if 조건에서 0으로 나눴어요"); l = Math.trunc(l / r); break;
+        default: if (r === 0) throw compileError(line, "#if 조건에서 0으로 나눴어요"); l %= r;
+      }
+    }
+  };
+  const ternary = () => {
+    const c = binary(1);
+    if (!isOp("?")) return c;
+    i++;
+    const a = ternary();
+    if (!isOp(":")) throw fail();
+    i++;
+    const b = ternary();
+    return c ? a : b;
+  };
+  const v = ternary();
+  if (i < toks.length) throw fail();
+  return v;
+}
+
 /** 소스 코드를 전처리하고 토큰 목록을 만들어요. */
 export function tokenize(src) {
   const { tokens, directives, lastLine } = rawTokens(src);
@@ -221,9 +293,45 @@ export function tokenize(src) {
   // 지시문이 적용되는 위치(토큰 번호)에 따라 정의가 바뀌므로, 지시문과 토큰을 순서대로 처리해요.
   const out = [];
   let d = 0;
+  // #if / #ifdef 의 상태: 지금 읽는 줄을 쓸지(active), 이미 참인 갈래가 있었는지(taken)
+  const conds = [];
+  const isActive = () => conds.every((c) => c.active);
   const applyDirective = (dir) => {
     const { text, line } = dir;
     const word = text.split(/\s+/)[0];
+    const arg = text.slice(word.length).trim();
+    if (word === "ifdef" || word === "ifndef" || word === "if") {
+      const outer = isActive();
+      let truth = false;
+      if (outer) {
+        if (word === "if") truth = Boolean(evalCondition(arg, line, macros));
+        else {
+          if (!/^\w+$/.test(arg)) throw compileError(line, `#${word} 뒤에는 이름 하나가 와야 해요`);
+          truth = macros.has(arg) === (word === "ifdef");
+        }
+      }
+      conds.push({ active: outer && truth, taken: !outer || truth, line, sawElse: false });
+      return;
+    }
+    if (word === "elif" || word === "else" || word === "endif") {
+      const c = conds[conds.length - 1];
+      if (!c) throw compileError(line, `#${word} 앞에 짝이 되는 #if가 없어요`);
+      if (word === "endif") { conds.pop(); return; }
+      if (c.sawElse) throw compileError(line, `#else 뒤에 #${word}가 또 나왔어요`);
+      if (word === "else") {
+        c.sawElse = true;
+        c.active = !c.taken;
+        c.taken = true;
+      } else {
+        const outer = conds.slice(0, -1).every((x) => x.active);
+        const truth = !c.taken && outer && Boolean(evalCondition(arg, line, macros));
+        c.active = truth;
+        c.taken = c.taken || truth;
+      }
+      return;
+    }
+    if (!isActive()) return;
+    if (word === "error") throw compileError(line, `#error: ${arg}`);
     if (word === "include") {
       const m = text.match(/^include\s*[<"]([^>"]+)[>"]$/);
       if (!m) throw compileError(line, "#include 문장이 올바르지 않아요", "예: #include <stdio.h>");
@@ -240,7 +348,7 @@ export function tokenize(src) {
     } else if (word === "pragma" || word === "") {
       // 무시해요
     } else {
-      throw compileError(line, `#${word}는 아직 지원하지 않아요`, "#include, #define, #undef 를 쓸 수 있어요.");
+      throw compileError(line, `#${word}는 아직 지원하지 않아요`, "#include, #define, #undef, #if, #ifdef, #ifndef, #else, #endif 를 쓸 수 있어요.");
     }
   };
 
@@ -297,9 +405,13 @@ export function tokenize(src) {
 
   for (let i = 0; i < tokens.length;) {
     while (d < directives.length && directives[d].at <= i) applyDirective(directives[d++]);
+    if (!isActive()) { i++; continue; }
     i = expand(tokens, i, out, new Set());
   }
   while (d < directives.length) applyDirective(directives[d++]);
+  if (conds.length) {
+    throw compileError(conds[conds.length - 1].line, "#if 가 #endif 로 닫히지 않았어요", "끝에 #endif 를 넣어 주세요.");
+  }
   out.push({ k: "eof", v: "<끝>", line: lastLine, col: 1 });
   return { tokens: out, includes };
 }

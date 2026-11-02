@@ -170,7 +170,7 @@ const C_SYMBOL_KEYS = [
   { label: "[ ]", run: () => editor.insertPair("[", "]") },
   { label: '" "', run: () => editor.insertPair('"', '"') },
   { label: "' '", run: () => editor.insertPair("'", "'") },
-  text("%d"), text("\\n"), { label: "&" },
+  text("%d"), text("\\n"), { label: "&" }, text("->"), { label: "." },
   { label: "=" }, { label: "==" }, { label: "+" }, { label: "-" }, { label: "*" }, { label: "/" },
   { label: "%" }, { label: "<" }, { label: ">" }, { label: "!" }, { label: "|" }, { label: "," },
   { label: "#" },
@@ -182,7 +182,7 @@ const C_WORD_KEYS = [
   fn("printf"), fn("scanf"),
   { gap: true },
   word("int"), word("double"), word("char"), word("if"), word("else"), word("for"), word("while"),
-  word("return"), word("break", "break;"), word("void"),
+  word("return"), word("break", "break;"), word("void"), word("struct"), word("typedef"),
   { label: "#include", kind: "word", run: () => editor.insertText("#include <stdio.h>\n") },
   { label: "main", kind: "fn", run: () => editor.insertText("int main(void) {\n    \n    return 0;\n}\n") },
   { gap: true },
@@ -314,12 +314,38 @@ function showFatal(engine, message) {
   append(card);
 }
 
+function renderFiles(box) {
+  const files = Object.entries(store.vfs);
+  if (files.length === 0) return;
+  box.append(el("h4", "vars-heading", `파일 ${files.length}개 (C 프로그램이 fopen으로 만든 것)`));
+  const list = el("ul", "var-list");
+  for (const [name, text] of files) {
+    const item = el("li", "var-item");
+    const type = el("span", "var-type", `${new TextEncoder().encode(text).length}바이트`);
+    type.dataset.kind = "file";
+    const del = el("button", "btn btn-ghost btn-file-del", "지우기");
+    del.type = "button";
+    del.addEventListener("click", () => {
+      store.deleteFile(name);
+      renderVariables(lastVariables);
+      toast(`'${name}' 파일을 지웠어요`);
+    });
+    const preview = text.length > 400 ? `${text.slice(0, 400)}…` : text;
+    item.append(el("span", "var-name", name), type, del, el("span", "var-value file-text", preview || "(빈 파일)"));
+    list.append(item);
+  }
+  box.append(list);
+}
+
+let lastVariables = null;
 function renderVariables(variables) {
+  lastVariables = variables;
   const box = $("#vars");
   box.textContent = "";
   $("#vars-count").textContent = variables ? variables.length : 0;
   if (!variables || variables.length === 0) {
     box.append(el("p", "vars-empty", variables ? "만들어진 변수가 없어요." : "코드를 실행하면 만들어진 변수가 여기에 나와요."));
+    renderFiles(box);
     return;
   }
   const list = el("ul", "var-list");
@@ -331,6 +357,7 @@ function renderVariables(variables) {
     list.append(item);
   }
   box.append(list);
+  renderFiles(box);
 }
 
 function switchTab(name) {
@@ -383,6 +410,7 @@ function makeEngine(lang) {
     },
     onDone(result, run) {
       $("#answer-form").hidden = true;
+      if (result.files) store.setFiles(result.files);
       if (result.status === "error") {
         showError(result.error);
         if (result.error.line) editor.markError(result.error.line);
@@ -414,7 +442,7 @@ function runCode() {
   $("#answer-form").hidden = true;
   switchTab("console");
   append(el("div", "run-head", `${file.name} 실행`));
-  if (engine.run(editor.value) === "queued") {
+  if (engine.run(editor.value, { files: store.vfs }) === "queued") {
     const note = el("p", "note", `${LANGS[engine.lang].engine} 엔진을 불러오는 중이에요. 처음에는 조금 걸릴 수 있어요.`);
     note.dataset.loading = "";
     append(note);
@@ -442,6 +470,15 @@ $("#answer-form").addEventListener("submit", (e) => {
   append(el("div", "reply", value || " "));
   $("#answer-form").hidden = true;
   engine.answer(value);
+});
+
+// 입력 끝(EOF): C의 getchar() == EOF, scanf() == EOF, 파이썬의 EOFError
+$("#btn-eof").addEventListener("click", () => {
+  const engine = cur();
+  if (engine.state !== "waiting") return;
+  append(el("div", "reply reply-eof", "입력 끝 (EOF)"));
+  $("#answer-form").hidden = true;
+  engine.answer(null);
 });
 
 // ---------- 내 코드 서랍 ----------

@@ -238,4 +238,114 @@ int main(void) {
 }
 `,
   },
+  {
+    lang: "c",
+    name: "C 구조체로 성적표",
+    about: "struct, typedef, qsort로 점수 순서 정하기",
+    code: `#include <stdio.h>
+#include <stdlib.h>
+
+typedef struct {
+    char name[20];
+    int korean;
+    int math;
+} Student;
+
+int total(Student s) {
+    return s.korean + s.math;
+}
+
+// qsort가 쓸 비교 함수: 합계가 큰 학생이 앞으로
+int byTotal(const void *a, const void *b) {
+    return total(*(const Student *)b) - total(*(const Student *)a);
+}
+
+int main(void) {
+    Student list[] = {
+        {"민지", 88, 92},
+        {"서준", 95, 71},
+        {.name = "하윤", .korean = 79, .math = 98},
+    };
+    int n = sizeof(list) / sizeof(list[0]);
+
+    qsort(list, n, sizeof(Student), byTotal);
+    for (int i = 0; i < n; i++) {
+        printf("%d등 %s: %d점\\n", i + 1, list[i].name, total(list[i]));
+    }
+    return 0;
+}
+`,
+  },
+  {
+    lang: "c",
+    name: "C 연결 리스트",
+    about: "malloc과 구조체 포인터로 줄 세우기",
+    code: `#include <stdio.h>
+#include <stdlib.h>
+
+typedef struct Node {
+    int value;
+    struct Node *next;
+} Node;
+
+// 맨 앞에 새 칸을 붙여요
+Node *push(Node *head, int value) {
+    Node *n = (Node *)malloc(sizeof(Node));
+    n->value = value;
+    n->next = head;
+    return n;
+}
+
+int main(void) {
+    Node *head = NULL;
+    int x;
+    printf("숫자를 넣고, 다 넣었으면 [입력 끝]을 눌러요.\\n");
+    while (scanf("%d", &x) == 1) {
+        head = push(head, x);
+    }
+
+    printf("거꾸로: ");
+    for (Node *p = head; p != NULL; p = p->next) {
+        printf("%d ", p->value);
+    }
+    printf("\\n");
+
+    while (head != NULL) {   // 다 쓴 메모리는 돌려줘요
+        Node *next = head->next;
+        free(head);
+        head = next;
+    }
+    return 0;
+}
+`,
+  },
+  {
+    lang: "c",
+    name: "C 파일에 저장하기",
+    about: "fopen, fprintf, fscanf (변수 탭에서 파일을 볼 수 있어요)",
+    code: `#include <stdio.h>
+
+int main(void) {
+    // 1. 파일에 쓰기
+    FILE *fp = fopen("diary.txt", "a");
+    char memo[50];
+    printf("오늘의 한 줄: ");
+    scanf(" %[^\\n]", memo);
+    fprintf(fp, "%s\\n", memo);
+    fclose(fp);
+
+    // 2. 파일 읽기
+    fp = fopen("diary.txt", "r");
+    char line[50];
+    int count = 0;
+    printf("--- 지금까지 쓴 일기 ---\\n");
+    while (fgets(line, sizeof(line), fp) != NULL) {
+        count++;
+        printf("%d. %s", count, line);
+    }
+    fclose(fp);
+    return 0;
+}
+`,
+  },
 ];

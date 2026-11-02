@@ -4,10 +4,10 @@ import { compileError, T, ptr, func } from "./types.js";
 
 const BASE_WORDS = new Set(["void", "char", "short", "int", "long", "float", "double", "signed", "unsigned", "_Bool", "bool", "size_t"]);
 const QUALIFIERS = new Set(["const", "volatile", "register", "auto", "inline", "restrict"]);
-const STORAGE = new Set(["static", "extern"]);
-const UNSUPPORTED_TYPES = { struct: "구조체(struct)", union: "공용체(union)", enum: "열거형(enum)", typedef: "typedef" };
+const STORAGE = new Set(["static", "extern", "typedef"]);
+const TAG_WORDS = new Set(["struct", "union", "enum"]);
 export const KEYWORDS = new Set([
-  ...BASE_WORDS, ...QUALIFIERS, ...STORAGE, ...Object.keys(UNSUPPORTED_TYPES),
+  ...BASE_WORDS, ...QUALIFIERS, ...STORAGE, ...TAG_WORDS,
   "if", "else", "while", "do", "for", "switch", "case", "default", "break", "continue", "return", "goto", "sizeof",
 ]);
 
@@ -29,6 +29,14 @@ class Parser {
     this.t = tokens;
     this.i = 0;
     this.includes = includes;
+    this.typedefs = [new Map()]; // typedef 이름들 (블록마다 한 층)
+    // 헤더가 미리 만들어 둔 타입 이름들
+    if (includes.has("stdio.h")) this.typedefs[0].set("FILE", { k: "file", name: "FILE", size: 1 });
+    if (includes.has("time.h")) {
+      this.typedefs[0].set("time_t", T.long);
+      this.typedefs[0].set("clock_t", T.long);
+    }
+    this.tags = new Map(); // struct 이름들
   }
 
   get cur() { return this.t[this.i]; }
@@ -47,9 +55,19 @@ class Parser {
     throw compileError(this.cur.line, `'${v}'가 와야 하는데 '${show(this.cur)}'가 나왔어요`, hint);
   }
 
+  isTypedefName(name) {
+    for (let i = this.typedefs.length - 1; i >= 0; i--) if (this.typedefs[i].has(name)) return true;
+    return false;
+  }
+
+  typedefType(name) {
+    for (let i = this.typedefs.length - 1; i >= 0; i--) if (this.typedefs[i].has(name)) return this.typedefs[i].get(name);
+    return null;
+  }
+
   isTypeStart(tok = this.cur) {
     if (tok.k !== "id") return false;
-    return BASE_WORDS.has(tok.v) || QUALIFIERS.has(tok.v) || STORAGE.has(tok.v) || tok.v in UNSUPPORTED_TYPES;
+    return BASE_WORDS.has(tok.v) || QUALIFIERS.has(tok.v) || STORAGE.has(tok.v) || TAG_WORDS.has(tok.v) || this.isTypedefName(tok.v);
   }
 
   // ---------- 타입 ----------
@@ -57,21 +75,100 @@ class Parser {
     const line = this.cur.line;
     const words = [];
     let storage = null;
+    let named = null; // struct, enum, typedef 이름으로 정한 타입
+    const enums = [];
     while (this.cur.k === "id") {
       const v = this.cur.v;
-      if (v in UNSUPPORTED_TYPES) {
-        throw compileError(this.cur.line, `${UNSUPPORTED_TYPES[v]}는 아직 지원하지 않아요`, "지금은 int, double, char 같은 기본 타입과 배열, 포인터를 쓸 수 있어요.");
-      }
-      if (STORAGE.has(v)) storage = v;
-      else if (BASE_WORDS.has(v)) words.push(v);
-      else if (!QUALIFIERS.has(v)) break;
+      if (STORAGE.has(v)) {
+        if (storage) throw compileError(this.cur.line, `${storage}와 ${v}를 함께 쓸 수 없어요`);
+        storage = v;
+      } else if (QUALIFIERS.has(v)) {
+        // const 같은 말은 의미만 있고 실행에는 영향이 없어요
+      } else if (BASE_WORDS.has(v) && !named) {
+        words.push(v);
+      } else if (v === "struct" || v === "union") {
+        if (named || words.length) throw compileError(this.cur.line, "타입이 두 번 적혀 있어요");
+        named = this.structSpec();
+        continue;
+      } else if (v === "enum") {
+        if (named || words.length) throw compileError(this.cur.line, "타입이 두 번 적혀 있어요");
+        const def = this.enumSpec();
+        if (def) enums.push(def);
+        named = T.int;
+        continue;
+      } else if (!named && words.length === 0 && this.isTypedefName(v)) {
+        named = this.typedefType(v);
+      } else break;
       this.next();
     }
-    if (words.length === 0) {
+    if (!named && words.length === 0) {
       if (storage) throw compileError(line, `${storage} 뒤에 타입(int 등)이 필요해요`);
       return null;
     }
-    return { type: this.combine(words, line), storage };
+    return { type: named || this.combine(words, line), storage, enums, line };
+  }
+
+  structSpec() {
+    const kw = this.next();
+    if (kw.v === "union") {
+      throw compileError(kw.line, "공용체(union)는 아직 지원하지 않아요", "여러 값을 묶으려면 struct를 써 보세요.");
+    }
+    let tag = null;
+    if (this.cur.k === "id" && !KEYWORDS.has(this.cur.v)) tag = this.next().v;
+    let t = tag ? this.tags.get(`struct ${tag}`) : null;
+    if (!this.is("{")) {
+      if (!tag) throw compileError(kw.line, "struct 뒤에 이름이나 { 가 필요해요");
+      if (!t) {
+        t = { k: "struct", tag, fields: [], complete: false, line: kw.line };
+        this.tags.set(`struct ${tag}`, t);
+      }
+      return t;
+    }
+    if (t && t.complete) throw compileError(kw.line, `struct ${tag}를 두 번 정의했어요`, `${t.line}번째 줄에 이미 있어요.`);
+    if (!t) {
+      t = { k: "struct", tag, fields: [], complete: false, line: kw.line };
+      if (tag) this.tags.set(`struct ${tag}`, t);
+    }
+    this.next();
+    const fields = [];
+    while (!this.is("}")) {
+      if (this.cur.k === "eof") throw compileError(kw.line, `${kw.line}번째 줄의 struct { 가 닫히지 않았어요`);
+      const specs = this.declSpecs();
+      if (!specs || specs.storage) throw compileError(this.cur.line, "구조체 안에는 타입과 이름으로 된 멤버만 쓸 수 있어요", "예: struct Point { int x; int y; };");
+      do {
+        const d = this.declarator(specs.type);
+        if (this.is(":")) throw compileError(this.cur.line, "비트 필드(:)는 아직 지원하지 않아요");
+        if (fields.some((f) => f.name === d.name)) throw compileError(d.line, `구조체에 '${d.name}' 멤버가 두 개 있어요`);
+        fields.push(d);
+      } while (this.accept(","));
+      this.expect(";");
+    }
+    this.next();
+    if (fields.length === 0) throw compileError(kw.line, "빈 구조체는 만들 수 없어요");
+    t.fields = fields;
+    t.complete = true;
+    return t;
+  }
+
+  enumSpec() {
+    const kw = this.next();
+    let tag = null;
+    if (this.cur.k === "id" && !KEYWORDS.has(this.cur.v)) tag = this.next().v;
+    if (!this.accept("{")) {
+      if (!tag) throw compileError(kw.line, "enum 뒤에 이름이나 { 가 필요해요");
+      return null;
+    }
+    const items = [];
+    while (!this.is("}")) {
+      const tok = this.cur;
+      if (tok.k !== "id" || KEYWORDS.has(tok.v)) throw compileError(tok.line, `enum 안에는 이름이 와야 하는데 '${show(tok)}'가 나왔어요`);
+      this.next();
+      const expr = this.accept("=") ? this.conditional() : null;
+      items.push({ name: tok.v, expr, line: tok.line });
+      if (!this.accept(",")) break;
+    }
+    this.expect("}", "enum 목록은 } 로 닫아요.");
+    return { k: "enumdef", tag, items, line: kw.line };
   }
 
   combine(words, line) {
@@ -105,19 +202,31 @@ class Parser {
     return unsigned ? T.uint : T.int;
   }
 
-  /** 선언자: 별(*), 이름, [배열 크기], (매개변수). 이름 없는 형태(캐스트용)도 읽어요. */
+  /**
+   * 선언자: 별(*), 이름, [배열 크기], (매개변수), 그리고 (*f)(int) 같은 괄호 묶음.
+   * C의 선언은 "안쪽에서 바깥쪽으로" 읽어요. 이름 없는 형태(캐스트, 매개변수)도 읽어요.
+   */
   declarator(base, abstract = false) {
-    let type = base;
+    const d = this.declaratorParts(abstract);
+    return { name: d.name, type: d.apply(base), line: d.line };
+  }
+
+  declaratorParts(abstract) {
+    let ptrs = 0;
     while (this.accept("*")) {
-      type = ptr(type);
+      ptrs++;
       while (this.cur.k === "id" && QUALIFIERS.has(this.cur.v)) this.next();
     }
-    if (this.is("(") && !abstract) {
-      throw compileError(this.cur.line, "괄호가 들어간 복잡한 선언은 아직 지원하지 않아요", "함수 포인터나 배열 포인터는 아직 쓸 수 없어요.");
-    }
     const line = this.cur.line;
+    let inner = null;
     let name = null;
-    if (this.cur.k === "id" && !KEYWORDS.has(this.cur.v)) {
+    const next = this.peek();
+    const grouping = this.is("(") && (this.is("*", next) || this.is("(", next) || (!abstract && next.k === "id" && !this.isTypeStart(next)));
+    if (grouping) {
+      this.next();
+      inner = this.declaratorParts(abstract);
+      this.expect(")");
+    } else if (this.cur.k === "id" && !KEYWORDS.has(this.cur.v) && !(abstract && this.isTypedefName(this.cur.v))) {
       name = this.next().v;
     } else if (!abstract) {
       if (this.cur.k === "id") {
@@ -125,45 +234,53 @@ class Parser {
       }
       throw compileError(line, `이름이 와야 하는데 '${show(this.cur)}'가 나왔어요`);
     }
-    const dims = [];
+    const suffixes = [];
     for (;;) {
       if (this.accept("[")) {
-        if (this.accept("]")) dims.push(null);
+        if (this.accept("]")) suffixes.push({ array: true, lenExpr: null });
         else {
-          dims.push(this.conditional());
+          suffixes.push({ array: true, lenExpr: this.conditional() });
           this.expect("]");
         }
-      } else if (this.is("(") && dims.length === 0 && name !== null && type.k !== "func") {
-        type = this.params(type);
+      } else if (this.is("(") && (name !== null || inner !== null || abstract)) {
+        suffixes.push({ func: this.params() });
       } else break;
     }
-    for (let k = dims.length - 1; k >= 0; k--) type = { k: "array", of: type, lenExpr: dims[k], line };
-    return { name, type, line };
+    const apply = (t) => {
+      for (let k = 0; k < ptrs; k++) t = ptr(t);
+      for (let k = suffixes.length - 1; k >= 0; k--) {
+        const sfx = suffixes[k];
+        if (sfx.array) t = { k: "array", of: t, lenExpr: sfx.lenExpr, line };
+        else t = { ...func(t, sfx.func.params, sfx.func.variadic), noProto: sfx.func.noProto };
+      }
+      return inner ? inner.apply(t) : t;
+    };
+    return { name: name ?? (inner ? inner.name : null), line, apply };
   }
 
-  params(ret) {
+  params() {
     this.expect("(");
     const params = [];
     let variadic = false;
-    if (this.accept(")")) return { ...func(ret, params), noProto: true };
+    if (this.accept(")")) return { params, noProto: true };
     if (this.is("void") && this.is(")", this.peek())) {
       this.next();
       this.next();
-      return func(ret, params);
+      return { params };
     }
     do {
       if (this.accept("...")) { variadic = true; break; }
       const specs = this.declSpecs();
       if (!specs) throw compileError(this.cur.line, `매개변수 '${show(this.cur)}' 앞에 타입이 필요해요`, "예: int add(int a, int b)");
-      const d = this.declarator(specs.type, true);
-      params.push(d);
+      params.push(this.declarator(specs.type, true));
     } while (this.accept(","));
     this.expect(")", "매개변수 목록은 ) 로 닫아요.");
-    return func(ret, params, variadic);
+    return { params, variadic };
   }
 
   typeName() {
     const specs = this.declSpecs();
+    if (!specs) throw compileError(this.cur.line, "타입 이름이 필요해요");
     const d = this.declarator(specs.type, true);
     if (d.name) throw compileError(d.line, "타입 이름 안에 변수 이름이 들어 있어요");
     return d.type;
@@ -181,7 +298,10 @@ class Parser {
         }
         throw compileError(line, `'${show(this.cur)}'는 여기에 올 수 없어요`, "함수나 변수 선언은 int, double 같은 타입으로 시작해요.");
       }
-      if (this.accept(";")) continue;
+      if (this.accept(";")) {
+        if (specs.enums.length) items.push({ k: "decl", items: [], enums: specs.enums, line });
+        continue;
+      }
       const d = this.declarator(specs.type);
       if (d.type.k === "func" && this.is("{")) {
         items.push({ k: "func", name: d.name, type: d.type, body: this.block(), line: d.line, storage: specs.storage });
@@ -196,14 +316,27 @@ class Parser {
     const items = [];
     let d = first;
     for (;;) {
-      let init = null;
-      if (this.accept("=")) init = this.initializer();
-      items.push({ ...d, init, storage: specs.storage });
+      if (specs.storage === "typedef") {
+        if (this.is("=")) throw compileError(this.cur.line, "typedef에는 = 로 값을 넣을 수 없어요");
+        this.typedefs[this.typedefs.length - 1].set(d.name, d.type);
+        if (d.type.k === "struct" && !d.type.alias) d.type.alias = d.name;
+      } else {
+        let init = null;
+        if (this.accept("=")) init = this.initializer();
+        items.push({ ...d, init, storage: specs.storage });
+      }
       if (!this.accept(",")) break;
       d = this.declarator(specs.type);
     }
     this.expect(";");
-    return { k: "decl", items, line: first.line };
+    return { k: "decl", items, enums: specs.enums, line: first.line };
+  }
+
+  /** 문장 자리의 선언 (int x; / struct P p; / enum {...}; 처럼 이름 없는 것도) */
+  localDeclaration() {
+    const specs = this.declSpecs();
+    if (this.accept(";")) return { k: "decl", items: [], enums: specs.enums, line: specs.line };
+    return this.declRest(specs, this.declarator(specs.type));
   }
 
   initializer() {
@@ -211,8 +344,20 @@ class Parser {
       const line = this.next().line;
       const items = [];
       while (!this.is("}")) {
-        if (this.is("[") || this.is(".")) throw compileError(this.cur.line, "지정 초기화([0] = …)는 아직 지원하지 않아요");
-        items.push(this.initializer());
+        if (this.is(".") && this.peek().k === "id") {
+          const line2 = this.next().line;
+          const field = this.next().v;
+          this.expect("=", "예: .x = 1");
+          items.push({ k: "desig", field, init: this.initializer(), line: line2 });
+        } else if (this.is("[")) {
+          const line2 = this.next().line;
+          const index = this.conditional();
+          this.expect("]");
+          this.expect("=", "예: [2] = 5");
+          items.push({ k: "desig", index, init: this.initializer(), line: line2 });
+        } else {
+          items.push(this.initializer());
+        }
         if (!this.accept(",")) break;
       }
       this.expect("}", "중괄호 초기화 목록은 } 로 닫아요.");
@@ -224,6 +369,7 @@ class Parser {
   // ---------- 문장 ----------
   block() {
     const open = this.expect("{");
+    this.typedefs.push(new Map());
     const body = [];
     while (!this.is("}")) {
       if (this.cur.k === "eof") {
@@ -232,6 +378,7 @@ class Parser {
       body.push(this.statement());
     }
     this.next();
+    this.typedefs.pop();
     return { k: "block", body, line: open.line };
   }
 
@@ -323,10 +470,7 @@ class Parser {
         default:
           break;
       }
-      if (this.isTypeStart()) {
-        const specs = this.declSpecs();
-        return this.declRest(specs, this.declarator(specs.type));
-      }
+      if (this.isTypeStart()) return this.localDeclaration();
       if (this.is(":", this.peek()) && !KEYWORDS.has(tok.v)) {
         throw compileError(line, "이름표(label:)는 지원하지 않아요");
       }
@@ -430,7 +574,11 @@ class Parser {
         this.next();
         e = { k: "post", op: tok.v, e, line: tok.line };
       } else if (this.is(".") || this.is("->")) {
-        throw compileError(tok.line, "구조체(struct)의 . 와 -> 는 아직 지원하지 않아요");
+        this.next();
+        if (this.cur.k !== "id" || KEYWORDS.has(this.cur.v)) {
+          throw compileError(tok.line, `${tok.v} 뒤에는 멤버 이름이 와야 해요`, "예: p.x 또는 ptr->x");
+        }
+        e = { k: "member", e, name: this.next().v, arrow: tok.v === "->", line: tok.line };
       } else {
         return e;
       }

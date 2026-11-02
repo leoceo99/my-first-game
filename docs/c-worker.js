@@ -17,6 +17,7 @@ self.onmessage = (event) => {
     result = runC(msg.code, {
       answers: msg.answers,
       startTime: msg.time,
+      files: msg.files || {},
       onOutput: (text) => postMessage({ type: "output", stream: "stdout", text }),
       onInput: (prompt) => postMessage({ type: "input", prompt }),
     });

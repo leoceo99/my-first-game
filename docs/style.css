@@ -433,6 +433,7 @@ kbd, .welcome code {
 .var-type[data-kind="str"] { background: color-mix(in srgb, var(--tok-string) 16%, transparent); color: var(--tok-string); }
 .var-type[data-kind="int"], .var-type[data-kind="float"], .var-type[data-kind="char"] { background: color-mix(in srgb, var(--tok-number) 16%, transparent); color: var(--tok-number); }
 .var-type[data-kind="bool"], .var-type[data-kind="NoneType"] { background: color-mix(in srgb, var(--tok-keyword) 14%, transparent); color: var(--tok-keyword); }
+.var-type[data-kind="struct"], .var-type[data-kind="file"] { background: color-mix(in srgb, var(--tok-decorator) 16%, transparent); color: var(--tok-decorator); }
 .var-type[data-kind="function"], .var-type[data-kind="class"] { background: color-mix(in srgb, var(--tok-definition) 14%, transparent); color: var(--tok-definition); }
 .var-value {
   grid-column: 1 / -1;
@@ -458,6 +459,12 @@ kbd, .welcome code {
   font-family: var(--font-code); font-size: max(16px, var(--code-size));
 }
 .btn-send { background: var(--accent); color: var(--surface); }
+.btn-eof { padding: 0 12px; font-size: 14px; }
+.reply-eof { background: var(--surface); color: var(--muted); border: 1px dashed var(--line); }
+.vars-heading { margin: 18px 0 8px; font-size: 13px; color: var(--muted); }
+.vars-heading:first-child { margin-top: 0; }
+.var-item .btn-file-del { min-height: 30px; padding: 0 10px; font-size: 12px; justify-self: end; }
+.file-text { max-height: 9em; overflow: auto; }
 
 /* ---------- 내 코드 서랍 ---------- */
 .scrim { position: absolute; inset: 0; background: rgba(8, 14, 20, 0.35); z-index: 10; }

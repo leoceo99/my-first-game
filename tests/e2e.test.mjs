@@ -296,3 +296,34 @@ test("C 코드: 키 바, 색칠, 실행 오류, 무한 반복 멈추기", { skip
   assert.deepEqual(errors, []);
   await context.close();
 });
+
+test("C: 입력 끝(EOF) 버튼, 파일은 변수 탭에 남아요", { skip: !haveEngine }, async () => {
+  const { context, page, errors } = await openApp({ serviceWorkers: "block" });
+  await page.click("#btn-drawer");
+  await page.click(".example-list button:has-text('C 연결 리스트')");
+  await page.waitForFunction(() => window.pybridge.engine.lang === "c" && window.pybridge.engine.state === "ready", null, { timeout: 10000 });
+  await page.click("#btn-run");
+  await answer(page, "5 7");
+  await waitAsk(page);
+  await page.click("#btn-eof");
+  await waitIdle(page);
+  assert.match(await consoleText(page), /거꾸로: 7 5/);
+  assert.match(await page.locator(".reply-eof").innerText(), /입력 끝/);
+
+  await page.click("#btn-drawer");
+  await page.click(".example-list button:has-text('C 파일에 저장하기')");
+  await page.click("#btn-run");
+  await answer(page, "첫 일기");
+  await waitIdle(page);
+  await page.click("#btn-run");
+  await answer(page, "둘째 일기");
+  await waitIdle(page);
+  assert.match(await consoleText(page), /1\. 첫 일기[\s\S]*2\. 둘째 일기/);
+  await page.click("#tab-vars");
+  const vars = await page.locator("#vars").innerText();
+  assert.match(vars, /diary\.txt/);
+  assert.match(vars, /첫 일기\s*둘째 일기/);
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/8-c-files.png` });
+  assert.deepEqual(errors, []);
+  await context.close();
+});

@@ -131,7 +131,8 @@ export function explainError(error) {
       title = "숫자가 너무 커요";
       break;
     case "EOFError":
-      title = "입력을 받지 못했어요";
+      title = "입력이 끝났어요 (EOF)";
+      detail = "입력 끝(EOF)을 보낸 뒤에 input()이 또 답을 기다렸어요. 입력을 끝까지 읽었는지 확인해 보세요.";
       break;
     default:
       break;

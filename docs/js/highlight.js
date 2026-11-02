@@ -155,7 +155,9 @@ const C_BUILTINS = new Set([
   "rand", "srand", "time", "exit", "abs", "atoi", "atof", "strlen", "strcpy", "strncpy", "strcat", "strcmp",
   "strncmp", "strchr", "strstr", "memset", "sqrt", "pow", "fabs", "floor", "ceil", "round", "sin", "cos",
   "tan", "log", "log10", "exp", "fmod", "toupper", "tolower", "isdigit", "isalpha", "isspace", "isupper",
-  "islower", "isalnum", "NULL", "true", "false", "stdin", "stdout", "EOF", "main",
+  "islower", "isalnum", "NULL", "true", "false", "stdin", "stdout", "stderr", "EOF", "main",
+  "FILE", "fopen", "fclose", "fprintf", "fscanf", "fputs", "fgetc", "feof", "qsort", "bsearch", "strtok",
+  "memcpy", "strrchr", "snprintf", "time_t",
 ]);
 
 export function tokenizeC(src) {

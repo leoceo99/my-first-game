@@ -77,7 +77,7 @@ export class Engine {
         if (this.pendingCode !== null) {
           const code = this.pendingCode;
           this.pendingCode = null;
-          this.run(code);
+          this.run(code, this.pendingExtra || {});
         }
         break;
       case "fatal":
@@ -108,9 +108,10 @@ export class Engine {
   }
 
   /** 코드를 실행해요. 엔진이 아직 준비 중이면 준비되자마자 실행하고 "queued"를 돌려줘요. */
-  run(code) {
+  run(code, extra = {}) {
     if (this.state !== "ready") {
       this.pendingCode = code;
+      this.pendingExtra = extra;
       if (this.state === "failed" || this.state === "off") this.start();
       return "queued";
     }
@@ -121,6 +122,7 @@ export class Engine {
       asked: 0,
       seed: Math.floor(Math.random() * 2 ** 31),
       time: Math.floor(Date.now() / 1000),
+      files: extra.files || {},
     };
     this.send();
     return "started";
@@ -130,11 +132,11 @@ export class Engine {
     const run = this.current;
     this.setState("running");
     this.worker.postMessage({
-      type: "run", runId: run.runId, code: run.code, answers: run.answers, seed: run.seed, time: run.time,
+      type: "run", runId: run.runId, code: run.code, answers: run.answers, seed: run.seed, time: run.time, files: run.files,
     });
   }
 
-  /** input()에 대한 답을 보내요. 지금까지의 답을 모두 넣어 처음부터 다시 실행해요. */
+  /** input()에 대한 답을 보내요 (null이면 입력 끝, EOF). 지금까지의 답을 모두 넣어 처음부터 다시 실행해요. */
   answer(value) {
     if (this.state !== "waiting" || !this.current) return;
     this.current.answers.push(value);

@@ -49,6 +49,9 @@ export const isArr = (t) => t.k === "array";
 export const isScalar = (t) => isArith(t) || isPtr(t);
 export const is64 = (t) => t.k === "int" && t.bits === 64;
 export const isVoid = (t) => t.k === "void";
+export const isStruct = (t) => t.k === "struct";
+export const isFunc = (t) => t.k === "func";
+export const isFuncPtr = (t) => t.k === "ptr" && t.to.k === "func";
 export const isCharLike = (t) => t.k === "int" && t.bits === 8;
 
 /** 배열을 첫 원소 주소로 바꾼 타입 (배열 → 포인터). */
@@ -56,7 +59,30 @@ export const decay = (t) => (isArr(t) ? ptr(t.of) : t);
 
 /** 이 타입이 차지하는 저장 칸 수 (칸 하나에 기본 값 하나). */
 export function cells(t) {
-  return isArr(t) ? (t.len ?? 0) * cells(t.of) : 1;
+  if (isArr(t)) return (t.len ?? 0) * cells(t.of);
+  if (isStruct(t)) return t.cellCount;
+  return 1;
+}
+
+export function alignOf(t) {
+  if (isArr(t)) return alignOf(t.of);
+  if (isStruct(t)) return t.align;
+  return Math.max(1, t.size || 1);
+}
+
+/** 이 타입의 모든 칸을 0으로 채운 값 목록 (구조체는 칸마다 0의 종류가 달라요). */
+export function zerosOf(t) {
+  if (isStruct(t)) {
+    if (!t.zeros) t.zeros = t.fields.flatMap((f) => (t.isUnion && f !== t.fields[0] ? [] : zerosOf(f.type)));
+    return t.zeros;
+  }
+  if (isArr(t)) {
+    const one = zerosOf(t.of);
+    const out = new Array(one.length * (t.len ?? 0));
+    for (let i = 0; i < out.length; i++) out[i] = one[i % one.length];
+    return out;
+  }
+  return [zeroOf(t)];
 }
 
 /** 배열의 가장 안쪽 원소 타입. */
@@ -65,7 +91,14 @@ export function baseOf(t) {
 }
 
 export function sameType(a, b) {
+  if (a === b) return true;
   if (a.k !== b.k) return false;
+  if (a.k === "struct") return false;
+  if (a.k === "file") return true;
+  if (a.k === "func") {
+    return sameType(a.ret, b.ret) && a.params.length === b.params.length &&
+      a.params.every((p, i) => sameType(p.type, b.params[i].type));
+  }
   if (a.k === "int" || a.k === "float") return a.name === b.name;
   if (a.k === "ptr") return sameType(a.to, b.to);
   if (a.k === "array") return a.len === b.len && sameType(a.of, b.of);
@@ -74,14 +107,18 @@ export function sameType(a, b) {
 
 export function typeName(t) {
   switch (t.k) {
-    case "ptr": return isArr(t.to) ? `${typeName(baseOf(t.to))} (*)[${t.to.len}]` : `${typeName(t.to)} *`;
+    case "ptr":
+      if (isArr(t.to)) return `${typeName(baseOf(t.to))} (*)[${t.to.len}]`;
+      if (isFunc(t.to)) return `${typeName(t.to.ret)} (*)(${t.to.params.map((p) => typeName(p.type)).join(", ")})`;
+      return `${typeName(t.to)} *`;
     case "array": {
       let dims = "";
       let x = t;
       while (isArr(x)) { dims += `[${x.len ?? ""}]`; x = x.of; }
       return `${typeName(x)} ${dims}`;
     }
-    case "func": return `${typeName(t.ret)} (...)`;
+    case "func": return `${typeName(t.ret)} (${t.params.map((p) => typeName(p.type)).join(", ")})`;
+    case "struct": return t.alias || `${t.isUnion ? "union" : "struct"} ${t.tag || "(이름 없음)"}`;
     default: return t.name;
   }
 }
@@ -90,7 +127,9 @@ export function typeName(t) {
 export function friendlyType(t) {
   if (isInt(t)) return t.bits === 8 ? `글자(${t.name})` : `정수(${t.name})`;
   if (isFloat(t)) return `실수(${t.name})`;
+  if (isFuncPtr(t)) return `함수 포인터(${typeName(t)})`;
   if (isPtr(t)) return isCharLike(t.to) ? "문자열(char *)" : `주소(${typeName(t)})`;
+  if (isStruct(t)) return `구조체(${typeName(t)})`;
   if (isArr(t)) return `배열(${typeName(t)})`;
   return t.name;
 }
@@ -180,6 +219,11 @@ export class Store {
     this.freed = false;
     this.heap = false;
   }
+}
+
+/** 함수를 가리키는 값 (C의 함수 포인터). */
+export class FnRef {
+  constructor(fi) { this.fi = fi; }
 }
 
 /** 메모리 위치를 가리키는 값 (C의 포인터). off는 칸 번호예요. */

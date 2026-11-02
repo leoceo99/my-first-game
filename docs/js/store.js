@@ -43,6 +43,22 @@ export class Store {
     return this.data.settings;
   }
 
+  /** C 프로그램이 fopen으로 만든 가상 파일들 (이름 → 글자) */
+  get vfs() {
+    return this.data.vfs || {};
+  }
+
+  setFiles(files) {
+    this.data.vfs = { ...files };
+    this.saveSoon();
+  }
+
+  deleteFile(name) {
+    const next = { ...this.vfs };
+    delete next[name];
+    this.setFiles(next);
+  }
+
   files() {
     return [...this.data.files].sort((a, b) => (b.updated || 0) - (a.updated || 0));
   }

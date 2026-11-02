@@ -174,6 +174,11 @@ class InputTest(unittest.TestCase):
         run("try:\n    input('?')\nfinally:\n    print('끝')", [], mode="replay", bridge=shown)
         self.assertEqual(shown.events, [("input", "?")])
 
+    def test_eof_answer_raises_eoferror(self):
+        result, _ = run("a = input()\nb = input()", ["x", None], mode="replay")
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["error"]["type"], "EOFError")
+
     def test_need_input_is_not_caught_by_user_except(self):
         result, _ = run("try:\n    input()\nexcept Exception:\n    print('잡힘')", [], mode="replay")
         self.assertEqual(result["status"], "waiting")
