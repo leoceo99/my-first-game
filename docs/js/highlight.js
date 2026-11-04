@@ -148,8 +148,13 @@ const C_KEYWORDS = new Set([
   "extern", "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return",
   "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void",
   "volatile", "while", "_Bool", "bool", "size_t",
+  "_Static_assert", "static_assert", "_Alignof", "alignof", "_Alignas", "_Generic", "_Noreturn", "noreturn", "_Thread_local",
 ]);
-const C_TYPES = new Set(["char", "double", "float", "int", "long", "short", "void", "unsigned", "signed", "bool", "_Bool", "size_t"]);
+const C_INT_TYPES = [
+  "int8_t", "uint8_t", "int16_t", "uint16_t", "int32_t", "uint32_t", "int64_t", "uint64_t", "intmax_t", "uintmax_t",
+  "ptrdiff_t", "time_t", "FILE", "div_t", "ldiv_t", "lldiv_t", "jmp_buf", "va_list",
+];
+const C_TYPES = new Set(["char", "double", "float", "int", "long", "short", "void", "unsigned", "signed", "bool", "_Bool", "size_t", ...C_INT_TYPES]);
 const C_BUILTINS = new Set([
   "printf", "scanf", "puts", "putchar", "getchar", "fgets", "sprintf", "fflush", "malloc", "calloc", "free",
   "rand", "srand", "time", "exit", "abs", "atoi", "atof", "strlen", "strcpy", "strncpy", "strcat", "strcmp",
@@ -159,9 +164,22 @@ const C_BUILTINS = new Set([
   "FILE", "fopen", "fclose", "fprintf", "fscanf", "fputs", "fgetc", "feof", "qsort", "bsearch", "strtok",
   "memcpy", "strrchr", "snprintf", "time_t", "va_list", "va_start", "va_arg", "va_end", "va_copy",
   "__func__", "__LINE__", "__FILE__", "__VA_ARGS__",
+  ...C_INT_TYPES, "sscanf", "perror", "fseek", "ftell", "fread", "fwrite", "ungetc", "strtol", "strtoul", "strtoll",
+  "strtoull", "strtod", "strtof", "atol", "atoll", "realloc", "div", "ldiv", "abort", "atexit", "getenv", "memmove",
+  "memcmp", "memchr", "strspn", "strcspn", "strpbrk", "strdup", "strndup", "strerror", "isnan", "isinf", "modf",
+  "frexp", "ldexp", "hypot", "cbrt", "trunc", "fmin", "fmax", "lround", "isprint", "iscntrl", "isgraph",
+  "gmtime", "localtime", "mktime", "strftime", "difftime", "assert", "setjmp", "longjmp", "errno", "offsetof",
+  "INT_MAX", "INT_MIN", "INFINITY", "NAN", "SEEK_SET", "SEEK_CUR", "SEEK_END", "PRId64", "PRIu64", "RAND_MAX",
 ]);
 
-export function tokenizeC(src) {
+const CPP_KEYWORDS = new Set([
+  "bool", "true", "false", "nullptr", "class", "public", "private", "protected", "this", "virtual", "friend", "operator",
+  "explicit", "mutable", "new", "delete", "namespace", "using", "template", "typename", "try", "catch", "throw",
+  "constexpr", "decltype", "static_cast", "const_cast", "reinterpret_cast", "dynamic_cast", "override", "final",
+]);
+const CPP_BUILTINS = new Set(["std", "cout", "cin", "cerr", "endl", "string", "vector", "map", "set", "pair", "make_pair", "sort"]);
+
+export function tokenizeC(src, cpp = false) {
   const tokens = [];
   const n = src.length;
   let i = 0;
@@ -213,8 +231,8 @@ export function tokenizeC(src) {
       const w = src.slice(i, j);
       let k = j;
       while (k < n && (src[k] === " " || src[k] === "\t")) k++;
-      if (C_KEYWORDS.has(w)) tokens.push({ type: "keyword", start: i, end: j });
-      else if (C_BUILTINS.has(w)) tokens.push({ type: "builtin", start: i, end: j });
+      if (C_KEYWORDS.has(w) || (cpp && CPP_KEYWORDS.has(w))) tokens.push({ type: "keyword", start: i, end: j });
+      else if (C_BUILTINS.has(w) || (cpp && CPP_BUILTINS.has(w))) tokens.push({ type: "builtin", start: i, end: j });
       else if (src[k] === "(" && (C_TYPES.has(prevWord) || prevWord === "*")) tokens.push({ type: "definition", start: i, end: j });
       prevWord = w;
       i = j;
@@ -237,10 +255,10 @@ export function tokenizeC(src) {
 
 /** 언어에 맞게 코드를 색칠된 HTML로 바꿔요. */
 export function highlightFor(lang, src) {
-  if (lang !== "c") return highlight(src);
+  if (lang !== "c" && lang !== "cpp") return highlight(src);
   let html = "";
   let pos = 0;
-  for (const t of tokenizeC(src)) {
+  for (const t of tokenizeC(src, lang === "cpp")) {
     if (t.start > pos) html += escapeHtml(src.slice(pos, t.start));
     html += `<span class="tok-${t.type}">${escapeHtml(src.slice(t.start, t.end))}</span>`;
     pos = t.end;

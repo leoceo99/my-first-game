@@ -16,7 +16,13 @@ const LANGS = {
     name: "C", ext: "c", mime: "text/x-csrc", engine: "C",
     newCode: "#include <stdio.h>\n\nint main(void) {\n    \n    return 0;\n}\n",
   },
+  // C++: 도입 준비 중이라 새로 만들기 버튼은 아직 숨겨요. .cpp 파일을 가져오면 열 수 있어요 (design/cpp-plan.md)
+  cpp: {
+    name: "C++", ext: "cpp", mime: "text/x-c++src", engine: "C++", hidden: true,
+    newCode: "#include <cstdio>\n\nint main() {\n    \n    return 0;\n}\n",
+  },
 };
+const VISIBLE_LANGS = Object.keys(LANGS).filter((lang) => !LANGS[lang].hidden);
 const langOf = () => store.current().lang;
 
 function el(tag, className, text) {
@@ -193,6 +199,7 @@ const C_WORD_KEYS = [
 const KEYSETS = {
   python: { symbols: PY_SYMBOL_KEYS, words: PY_WORD_KEYS },
   c: { symbols: C_SYMBOL_KEYS, words: C_WORD_KEYS },
+  cpp: { symbols: C_SYMBOL_KEYS, words: C_WORD_KEYS },
 };
 
 let keyMode = "symbols";
@@ -317,7 +324,7 @@ function showFatal(engine, message) {
 function renderFiles(box) {
   const files = Object.entries(store.vfs);
   if (files.length === 0) return;
-  box.append(el("h4", "vars-heading", `파일 ${files.length}개 (C 프로그램이 fopen으로 만든 것)`));
+  box.append(el("h4", "vars-heading", `파일 ${files.length}개 (프로그램이 만든 것, 파이썬·C가 함께 써요)`));
   const list = el("ul", "var-list");
   for (const [name, text] of files) {
     const item = el("li", "var-item");
@@ -416,7 +423,7 @@ function makeEngine(lang) {
         if (result.error.line) editor.markError(result.error.line);
         append(el("div", "run-end error", "오류로 멈췄어요"));
       } else if (result.status === "exit") {
-        append(el("div", "run-end", `${lang === "c" ? "exit" : "sys.exit"}(${result.exitCode})로 끝났어요`));
+        append(el("div", "run-end", `${lang === "python" ? "sys.exit" : "exit"}(${result.exitCode})로 끝났어요`));
       } else {
         const time = run.asked === 0 && typeof result.seconds === "number" ? ` · ${result.seconds.toFixed(2)}초` : "";
         const code = result.exitCode ? ` (종료 코드 ${result.exitCode})` : "";
@@ -429,7 +436,7 @@ function makeEngine(lang) {
   return engine;
 }
 
-const engines = { python: makeEngine("python"), c: makeEngine("c") };
+const engines = { python: makeEngine("python"), c: makeEngine("c"), cpp: makeEngine("cpp") };
 const cur = () => engines[langOf()];
 
 function runCode() {
@@ -514,7 +521,7 @@ function renderFileList() {
 function renderExamples() {
   const list = $("#example-list");
   list.textContent = "";
-  for (const lang of Object.keys(LANGS)) {
+  for (const lang of VISIBLE_LANGS) {
     list.append(el("li", "example-group", `${LANGS[lang].name} 예제`));
     for (const example of EXAMPLES.filter((x) => x.lang === lang)) {
       const li = el("li");
@@ -554,7 +561,7 @@ $("#btn-drawer").addEventListener("click", openDrawer);
 $("#btn-drawer-close").addEventListener("click", closeDrawer);
 $("#scrim").addEventListener("click", closeDrawer);
 
-for (const lang of Object.keys(LANGS)) {
+for (const lang of VISIBLE_LANGS) {
   $(`#btn-new-${lang}`).addEventListener("click", () => {
     openFile(store.create(`새 ${LANGS[lang].name} 코드`, LANGS[lang].newCode, lang));
     closeDrawer();
@@ -567,8 +574,8 @@ $("#file-import").addEventListener("change", async (e) => {
   e.target.value = "";
   if (!file) return;
   const code = (await file.text()).replace(/\r\n/g, "\n");
-  const lang = /\.(c|h)$/i.test(file.name) ? "c" : "python";
-  openFile(store.create(file.name.replace(/\.(py|txt|c|h)$/i, "") || "가져온 코드", code, lang));
+  const lang = /\.(c|h)$/i.test(file.name) ? "c" : /\.(cpp|cc|cxx|hpp)$/i.test(file.name) ? "cpp" : "python";
+  openFile(store.create(file.name.replace(/\.(py|txt|c|h|cpp|cc|cxx|hpp)$/i, "") || "가져온 코드", code, lang));
   closeDrawer();
   toast(`'${file.name}'을 가져왔어요`);
 });

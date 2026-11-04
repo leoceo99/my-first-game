@@ -3,12 +3,14 @@
 import { compileError, T, ptr, func } from "./types.js";
 
 const BASE_WORDS = new Set(["void", "char", "short", "int", "long", "float", "double", "signed", "unsigned", "_Bool", "bool", "size_t"]);
-const QUALIFIERS = new Set(["const", "volatile", "register", "auto", "inline", "restrict"]);
+const QUALIFIERS = new Set(["const", "volatile", "register", "auto", "inline", "restrict", "_Noreturn", "noreturn",
+  "_Thread_local", "__inline", "__restrict", "__inline__", "__restrict__", "__extension__"]);
 const STORAGE = new Set(["static", "extern", "typedef"]);
 const TAG_WORDS = new Set(["struct", "union", "enum"]);
 export const KEYWORDS = new Set([
   ...BASE_WORDS, ...QUALIFIERS, ...STORAGE, ...TAG_WORDS,
   "if", "else", "while", "do", "for", "switch", "case", "default", "break", "continue", "return", "goto", "sizeof",
+  "_Static_assert", "_Alignof", "alignof", "_Alignas", "_Generic", "__attribute__",
 ]);
 
 const BINARY = {
@@ -25,19 +27,52 @@ function show(tok) {
 }
 
 class Parser {
-  constructor(tokens, includes) {
+  constructor(tokens, includes, { dialect = "c" } = {}) {
     this.t = tokens;
     this.i = 0;
     this.includes = includes;
+    this.cpp = dialect === "cpp";
+    this.tags = new Map(); // struct 이름들
     this.typedefs = [new Map()]; // typedef 이름들 (블록마다 한 층)
     // 헤더가 미리 만들어 둔 타입 이름들
     if (includes.has("stdio.h")) this.typedefs[0].set("FILE", { k: "file", name: "FILE", size: 1 });
     if (includes.has("stdarg.h")) this.typedefs[0].set("va_list", { k: "valist", name: "va_list", size: 8 });
+    if (includes.has("stdint.h")) {
+      const ints = {
+        int8_t: T.schar, uint8_t: T.uchar, int16_t: T.short, uint16_t: T.ushort, int32_t: T.int, uint32_t: T.uint,
+        int64_t: T.llong, uint64_t: T.ullong, intmax_t: T.llong, uintmax_t: T.ullong,
+        int_least32_t: T.int, int_fast32_t: T.int, uint_least32_t: T.uint, uint_fast32_t: T.uint,
+      };
+      for (const [name, t] of Object.entries(ints)) this.typedefs[0].set(name, t);
+    }
+    if (includes.has("stddef.h") || includes.has("stdlib.h") || includes.has("stdio.h")) this.typedefs[0].set("ptrdiff_t", T.long);
+    const field = (name, type) => ({ name, type, line: 0 });
+    // 표준 헤더가 만들어 둔 구조체들: 컴파일러와 실행기가 표준 함수(div, gmtime 등)에서 같이 써요
+    this.builtinTypes = {};
+    const builtinStruct = (alias, fields) => ({ k: "struct", tag: null, alias, fields, complete: true, line: 0 });
+    if (includes.has("stdlib.h")) {
+      for (const [name, t] of [["div_t", T.int], ["ldiv_t", T.long], ["lldiv_t", T.llong]]) {
+        const st = builtinStruct(name, [field("quot", t), field("rem", t)]);
+        this.typedefs[0].set(name, st);
+        this.builtinTypes[name] = st;
+      }
+    }
+    if (includes.has("time.h")) {
+      const tm = builtinStruct(null, ["tm_sec", "tm_min", "tm_hour", "tm_mday", "tm_mon", "tm_year", "tm_wday", "tm_yday", "tm_isdst"].map((n) => field(n, T.int)));
+      tm.tag = "tm";
+      this.tags.set("struct tm", tm);
+      this.builtinTypes.tm = tm;
+    }
+    if (includes.has("setjmp.h")) {
+      // jmp_buf는 배열 타입이라 함수에 넘기면 주소가 돼요
+      const tag = { k: "jmpbuf", name: "jmp_buf", size: 200 };
+      this.typedefs[0].set("jmp_buf", { k: "array", of: tag, len: 1, size: 200 });
+      this.builtinTypes.jmpbuf = tag;
+    }
     if (includes.has("time.h")) {
       this.typedefs[0].set("time_t", T.long);
       this.typedefs[0].set("clock_t", T.long);
     }
-    this.tags = new Map(); // struct 이름들
   }
 
   get cur() { return this.t[this.i]; }
@@ -80,6 +115,7 @@ class Parser {
     const enums = [];
     let isConst = false;
     while (this.cur.k === "id") {
+      if (this.cur.v === "__attribute__" || this.cur.v === "_Alignas") { this.skipAttribute(); continue; }
       const v = this.cur.v;
       if (STORAGE.has(v)) {
         if (storage) throw compileError(this.cur.line, `${storage}와 ${v}를 함께 쓸 수 없어요`);
@@ -123,13 +159,17 @@ class Parser {
       if (!t) {
         t = fresh();
         this.tags.set(key, t);
+        this.cppTagName(tag, t);
       }
       return t;
     }
     if (t && t.complete) throw compileError(kw.line, `${kw.v} ${tag}를 두 번 정의했어요`, `${t.line}번째 줄에 이미 있어요.`);
     if (!t) {
       t = fresh();
-      if (tag) this.tags.set(key, t);
+      if (tag) {
+        this.tags.set(key, t);
+        this.cppTagName(tag, t);
+      }
     }
     this.next();
     const fields = [];
@@ -158,6 +198,13 @@ class Parser {
     return t;
   }
 
+  /** C++에서는 struct P { … }; 다음에 P를 바로 타입 이름으로 쓸 수 있어요 */
+  cppTagName(tag, t) {
+    if (!this.cpp) return;
+    this.typedefs[this.typedefs.length - 1].set(tag, t);
+    if (!t.alias) t.alias = tag;
+  }
+
   enumSpec() {
     const kw = this.next();
     let tag = null;
@@ -176,6 +223,7 @@ class Parser {
       if (!this.accept(",")) break;
     }
     this.expect("}", "enum 목록은 } 로 닫아요.");
+    if (this.cpp && tag) this.typedefs[this.typedefs.length - 1].set(tag, T.int);
     return { k: "enumdef", tag, items, line: kw.line };
   }
 
@@ -222,6 +270,9 @@ class Parser {
   }
 
   declaratorParts(abstract) {
+    if (this.cpp && (this.is("&") || this.is("&&"))) {
+      throw compileError(this.cur.line, "C++의 참조(&)는 아직 준비 중이에요 (C++ 2단계)", "지금은 포인터(int *p)로 써 주세요.");
+    }
     let ptrs = 0;
     const ptrConst = [];
     while (this.accept("*")) {
@@ -252,6 +303,8 @@ class Parser {
     const suffixes = [];
     for (;;) {
       if (this.accept("[")) {
+        // int a[static 10], int a[const] 같은 말은 의미만 있어요
+        while (this.cur.k === "id" && (this.cur.v === "static" || QUALIFIERS.has(this.cur.v))) this.next();
         if (this.accept("]")) suffixes.push({ array: true, lenExpr: null });
         else {
           suffixes.push({ array: true, lenExpr: this.conditional() });
@@ -291,7 +344,12 @@ class Parser {
     do {
       if (this.accept("...")) { variadic = true; break; }
       const specs = this.declSpecs();
-      if (!specs) throw compileError(this.cur.line, `매개변수 '${show(this.cur)}' 앞에 타입이 필요해요`, "예: int add(int a, int b)");
+      if (!specs) {
+        if (this.cur.k === "id" && (this.is(",", this.peek()) || this.is(")", this.peek()))) {
+          throw compileError(this.cur.line, "옛날(K&R) 방식의 함수 정의는 지원하지 않아요", "매개변수마다 타입을 함께 써 주세요. 예: int f(int x)");
+        }
+        throw compileError(this.cur.line, `매개변수 '${show(this.cur)}' 앞에 타입이 필요해요`, "예: int add(int a, int b)");
+      }
       params.push(this.declarator(specs.type, true, specs.isConst));
     } while (this.accept(","));
     this.expect(")", "매개변수 목록은 ) 로 닫아요.");
@@ -311,6 +369,7 @@ class Parser {
     const items = [];
     while (this.cur.k !== "eof") {
       const line = this.cur.line;
+      if (this.is("_Static_assert")) { items.push(this.staticAssert()); continue; }
       const specs = this.declSpecs();
       if (!specs) {
         if (this.cur.k === "id" && this.is("(", this.peek())) {
@@ -323,13 +382,14 @@ class Parser {
         continue;
       }
       const d = this.declarator(specs.type, false, specs.isConst);
+      while (this.is("__attribute__")) this.skipAttribute();
       if (d.type.k === "func" && this.is("{")) {
         items.push({ k: "func", name: d.name, type: d.type, body: this.block(), line: d.line, storage: specs.storage });
       } else {
         items.push(this.declRest(specs, d));
       }
     }
-    return { items };
+    return { items, builtinTypes: this.builtinTypes };
   }
 
   declRest(specs, first) {
@@ -485,6 +545,8 @@ class Parser {
           this.expect(";");
           return { k: "return", e, line };
         }
+        case "_Static_assert":
+          return this.staticAssert();
         case "goto": {
           this.next();
           if (this.cur.k !== "id" || KEYWORDS.has(this.cur.v)) throw compileError(line, "goto 뒤에는 이름표가 와야 해요", "예: goto end;");
@@ -574,6 +636,13 @@ class Parser {
         return { k: "cast", type, e: this.unary(), line };
       }
     }
+    if (this.is("_Alignof") || this.is("alignof")) {
+      this.next();
+      this.expect("(");
+      const type = this.typeName();
+      this.expect(")");
+      return { k: "alignof", type, line };
+    }
     if (this.is("sizeof")) {
       this.next();
       if (this.is("(") && this.isTypeStart(this.peek())) {
@@ -620,8 +689,62 @@ class Parser {
     }
   }
 
+  skipAttribute() {
+    // __attribute__((...)), _Alignas(...) : 컴파일러에게 주는 힌트라서 건너뛰어요
+    this.next();
+    this.expect("(");
+    let depth = 1;
+    while (depth > 0) {
+      if (this.cur.k === "eof") throw compileError(this.cur.line, "괄호가 닫히지 않았어요");
+      if (this.is("(")) depth++;
+      if (this.is(")")) depth--;
+      this.next();
+    }
+  }
+
+  staticAssert() {
+    const line = this.next().line;
+    this.expect("(");
+    const e = this.conditional();
+    let msg = null;
+    if (this.accept(",")) {
+      if (this.cur.k !== "str") throw compileError(this.cur.line, "_Static_assert의 두 번째 값은 문자열이에요");
+      msg = new TextDecoder().decode(Uint8Array.from(this.next().bytes));
+    }
+    this.expect(")");
+    this.expect(";");
+    return { k: "staticassert", e, msg, line };
+  }
+
   primary() {
     const tok = this.cur;
+    if (tok.k === "id" && tok.v === "_Generic" && this.is("(", this.peek())) {
+      // _Generic(식, 타입: 값, ..., default: 값)
+      this.next();
+      this.next();
+      const e = this.assignment();
+      const assoc = [];
+      while (this.accept(",")) {
+        const at = this.cur.line;
+        const type = this.accept("default") ? null : this.typeName();
+        this.expect(":", "예: _Generic(x, int: \"정수\", default: \"기타\")");
+        assoc.push({ type, value: this.assignment(), line: at });
+      }
+      this.expect(")");
+      return { k: "generic", e, assoc, line: tok.line };
+    }
+    if (tok.k === "id" && tok.v === "offsetof" && this.is("(", this.peek()) && this.includes.has("stddef.h")) {
+      this.next();
+      this.next();
+      const type = this.typeName();
+      this.expect(",");
+      const path = [];
+      if (this.cur.k !== "id") throw compileError(this.cur.line, "offsetof의 두 번째 값은 멤버 이름이에요");
+      path.push(this.next().v);
+      while (this.accept(".")) path.push(this.next().v);
+      this.expect(")");
+      return { k: "offsetof", type, path, line: tok.line };
+    }
     if (tok.k === "id" && tok.v === "va_arg" && this.is("(", this.peek()) && this.includes.has("stdarg.h")) {
       // va_arg(목록, 타입): 두 번째 자리에 타입이 와서 따로 읽어요
       this.next();
@@ -658,6 +781,6 @@ class Parser {
   }
 }
 
-export function parse(tokens, includes) {
-  return new Parser(tokens, includes).program();
+export function parse(tokens, includes, opts = {}) {
+  return new Parser(tokens, includes, opts).program();
 }

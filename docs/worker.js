@@ -69,10 +69,29 @@ async function init({ bases, runnerUrls }) {
   }
 }
 
-function run({ runId, code, answers, seed }) {
+const triedPackages = new Set();
+
+/** import numpy 처럼 외부 패키지를 쓰면, 실행 전에 엔진 저장소에서 받아 와요 (한 번만). */
+async function loadImports(code) {
+  try {
+    const wanted = pyodide.pyimport("pyodide.code").find_imports(code).toJs();
+    const fresh = wanted.filter((name) => !triedPackages.has(name));
+    if (fresh.length === 0) return;
+    fresh.forEach((name) => triedPackages.add(name));
+    await pyodide.loadPackagesFromImports(code, {
+      messageCallback: (m) => { if (/^Loading /.test(m)) postMessage({ type: "output", stream: "stdout", text: `(${m.replace("Loading ", "패키지 받는 중: ")})\n` }); },
+      errorCallback: () => {},
+    });
+  } catch {
+    // 받지 못한 패키지는 실행할 때 ModuleNotFoundError로 알려 줘요
+  }
+}
+
+async function run({ runId, code, answers, seed, files }) {
   let result;
   try {
-    const json = runFn(code, JSON.stringify(answers || []), seed, "replay", bridge);
+    if (!answers || answers.length === 0) await loadImports(code);
+    const json = runFn(code, JSON.stringify(answers || []), seed, "replay", bridge, JSON.stringify(files || {}));
     result = JSON.parse(json);
   } catch (err) {
     result = {

@@ -18,17 +18,21 @@ C는 외부 컴파일러 없이, 이 저장소에서 직접 만든 C 실행기(`
 코드를 토큰 → 구문 트리(AST) → 검사 → 실행 순서로 처리하고, 이 구문 트리는 나중에
 **언어 사이 변환**(C ↔ 파이썬 등)의 바탕이 돼요.
 
-- 타입: `int` `double` `char` `long` 등 기본 타입, 배열(다차원, 가변 길이), 포인터와 이중 포인터,
+C11 표준 문법과 표준 라이브러리를 하나하나 확인했어요. 자세한 지원 표는 [`design/support.md`](design/support.md)에 있어요.
+
+- 타입: `int` `double` `char` `long` 등 기본 타입, `stdint.h`(`int32_t` `uint8_t` …), 배열(다차원, 가변 길이 `int a[n][m]`), 포인터와 이중 포인터,
   **구조체(`struct`)**, **공용체(`union`)**, **비트 필드**, **`typedef`**, **`enum`**, **함수 포인터**,
   `int (*p)[3]` 같은 복잡한 선언, **`const`**(바꾸려 하면 알려 줘요)
 - 문장: 함수와 재귀, `if` `for` `while` `do` `switch`, **`goto`와 이름표**, `static` 지역 변수, 전역 변수,
-  지정 초기화(`{.x = 1}`, `{[2] = 5}`), **복합 리터럴**(`(int[]){1, 2, 3}`), **가변 인자 함수**(`...`, `<stdarg.h>`)
+  지정 초기화(`{.x = 1}`, `{[2] = 5}`), **복합 리터럴**(`(int[]){1, 2, 3}`), **가변 인자 함수**(`...`, `<stdarg.h>`),
+  `extern`, `_Static_assert` `_Generic` `_Alignof`, `setjmp`/`longjmp`
 - 전처리기: `#include` `#define`(매크로 함수, `#`, `##`, `__VA_ARGS__`) `#if` `#ifdef` `#ifndef` `#elif` `#else` `#endif`,
   `__LINE__` `__FILE__` `__func__`
-- 입출력: `printf`(실수 반올림까지 진짜 C와 똑같이) `scanf` `getchar` `fgets` `puts`,
-  **파일**(`fopen` `fprintf` `fscanf` `fgets` `fputs` `fclose`, 앱 안의 가상 파일), **입력 끝(EOF)** 버튼
-- 라이브러리: `string.h`(`strtok` `memcpy` 포함) `math.h` `ctype.h`
-  `stdlib.h`(`malloc` `calloc` `free` `qsort` `bsearch` `rand`) `time.h` `stdarg.h`
+- 입출력: `printf`(실수 반올림까지 진짜 C와 똑같이) `scanf` `sscanf` `getchar` `fgets` `puts` `perror`,
+  **파일**(`fopen` `fprintf` `fscanf` `fread` `fwrite` `fseek` `ftell` …, 파이썬과 함께 쓰는 앱 안의 가상 파일), **입력 끝(EOF)** 버튼
+- 라이브러리: `string.h`(`strtok` `memmove` `strdup` …) `math.h` `ctype.h`
+  `stdlib.h`(`malloc` `realloc` `free` `strtol` `qsort` `bsearch` `rand` `atexit` …) `time.h`(`struct tm` `strftime`)
+  `stdarg.h` `assert.h` `errno.h` `limits.h` `float.h` `inttypes.h` `stddef.h`(`offsetof`)
 - 다른 점: 값을 바이트로 쪼개 두지 않아서, `int`를 `char *`로 바꿔 한 바이트씩 읽는 코드는 안내 메시지를 보여줘요
   (같은 메모리를 다른 타입으로 보려면 `union`을 쓰면 돼요)
 - 진짜 C는 그냥 넘어가지만 배우는 사람에게 중요한 실수를 한국어로 잡아 줘요:
@@ -37,6 +41,12 @@ C는 외부 컴파일러 없이, 이 저장소에서 직접 만든 C 실행기(`
   구조체 포인터에 `.`을 씀(`->`가 맞음), 없는 멤버, `free` 뒤 사용, 닫은 파일 사용
 
 ![C 오류 안내](screenshots/c-error.png)
+
+### C++ (준비 중)
+
+C 실행기 위에 C++을 단계별로 쌓고 있어요. 지금은 C++ 모드(`.cpp` 파일 가져오기)에서 C 방식의 코드와
+`<cstdio>` 같은 헤더, `bool` `nullptr`, 구조체 이름을 바로 타입으로 쓰기가 돼요.
+`cout`, 클래스, 템플릿 같은 나머지는 [`design/cpp-plan.md`](design/cpp-plan.md)의 순서대로 만들어요.
 
 ### 이 앱만의 특징
 
@@ -86,7 +96,8 @@ C는 외부 컴파일러 없이, 이 저장소에서 직접 만든 C 실행기(`
 ```bash
 python3 -m unittest discover -s tests       # 파이썬 실행기 (runner.py)
 node --test tests/highlight.test.mjs        # 문법 색칠, 오류 설명
-node --test tests/c.test.mjs                # C 실행기
+node --test tests/c.test.mjs                # C 실행기 (표준 전수 검토 포함)
+node --test tests/cpp.test.mjs              # C++ 모드 (앞으로 만들 단계는 todo)
 
 # 실제 브라우저 테스트 (Playwright + Chromium 필요)
 mkdir -p docs/vendor/pyodide && cd /tmp && npm pack pyodide@314.0.7 && tar xzf pyodide-314.0.7.tgz \

@@ -106,7 +106,11 @@ export function sameType(a, b) {
   }
   if (a.k === "int" || a.k === "float") return a.name === b.name && a.bits === b.bits;
   if (a.k === "ptr") return sameType(a.to, b.to);
-  if (a.k === "array") return a.len === b.len && sameType(a.of, b.of);
+  if (a.k === "array") {
+    // 크기가 실행 중에 정해지는 배열(VLA)은 어떤 크기와도 맞다고 봐요
+    const flexible = a.vla || b.vla || a.anyLen || b.anyLen;
+    return (flexible || a.len === b.len) && sameType(a.of, b.of);
+  }
   return a.k === "void";
 }
 

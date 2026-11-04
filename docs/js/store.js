@@ -32,7 +32,7 @@ export class Store {
       const file = { id: makeId(), name: welcome.name, code: welcome.code, lang: welcome.lang || "python", updated: Date.now() };
       this.data = { files: [file], currentId: file.id };
     }
-    for (const f of this.data.files) if (f.lang !== "c") f.lang = "python"; // 예전 파일은 모두 파이썬이에요
+    for (const f of this.data.files) if (f.lang !== "c" && f.lang !== "cpp") f.lang = "python"; // 예전 파일은 모두 파이썬이에요
     this.data.settings = { fontSize: 16, ...(this.data.settings || {}) };
     if (!this.data.files.some((f) => f.id === this.data.currentId)) {
       this.data.currentId = this.data.files[0].id;

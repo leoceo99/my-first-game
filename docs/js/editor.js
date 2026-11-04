@@ -62,9 +62,14 @@ export class CodeEditor {
   }
 
   /** 언어를 바꿔요 ("python" 또는 "c"). 색칠, 자동 들여쓰기, 주석 기호가 바뀌어요. */
+  /** C와 C++는 같은 방식으로 편집해요 (중괄호, // 주석) */
+  get cLike() {
+    return this.lang === "c" || this.lang === "cpp";
+  }
+
   setLanguage(lang) {
     this.lang = lang;
-    this.ta.setAttribute("aria-label", lang === "c" ? "C 코드" : "파이썬 코드");
+    this.ta.setAttribute("aria-label", lang === "c" ? "C 코드" : lang === "cpp" ? "C++ 코드" : "파이썬 코드");
     this.render();
   }
 
@@ -162,7 +167,7 @@ export class CodeEditor {
       this.newline();
     } else if (e.key === "Backspace" && !mod && !e.altKey) {
       if (this.smartBackspace()) e.preventDefault();
-    } else if (e.key === "}" && this.lang === "c" && !mod) {
+    } else if (e.key === "}" && this.cLike && !mod) {
       if (this.closeBrace()) e.preventDefault();
     }
   }
@@ -243,7 +248,7 @@ export class CodeEditor {
     const before = v.slice(lineStart, s);
     let indent = before.match(/^[ \t]*/)[0];
     const trimmed = before.trimEnd();
-    if (this.lang === "c") {
+    if (this.cLike) {
       if (trimmed.endsWith("{")) {
         // { 와 } 사이에서 엔터를 치면 } 를 다음 줄로 내리고 가운데 줄로 들어가요.
         if (v[s] === "}") {
@@ -314,7 +319,7 @@ export class CodeEditor {
     const [start, end] = this.selectedLines();
     const lines = this.ta.value.slice(start, end).split("\n");
     const filled = lines.filter((l) => l.trim());
-    const mark = this.lang === "c" ? "//" : "#";
+    const mark = this.cLike ? "//" : "#";
     const uncomment = filled.length > 0 && filled.every((l) => l.trimStart().startsWith(mark));
     const strip = new RegExp(`^${mark} ?`);
     this.replaceLines((line) => {

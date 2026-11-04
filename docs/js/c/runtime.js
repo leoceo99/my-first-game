@@ -15,6 +15,11 @@ export class ExitSignal {
 
 const decoderFor = () => new TextDecoder("utf-8");
 
+/** longjmp가 setjmp 자리로 돌아갈 때 던지는 신호. */
+export class JumpSignal {
+  constructor(ctx, value) { this.ctx = ctx; this.value = value; }
+}
+
 /** 표준 입출력 스트림 (FILE *stdin, *stdout, *stderr) */
 export const STDIN = { kind: "stdin", name: "stdin" };
 export const STDOUT = { kind: "stdout", name: "stdout" };
@@ -31,13 +36,18 @@ function joinAnswers(answers) {
 }
 
 export class Runtime {
-  constructor({ answers = [], startTime = Math.floor(Date.now() / 1000), onOutput = () => {}, files = {} } = {}) {
+  constructor({ answers = [], startTime = Math.floor(Date.now() / 1000), onOutput = () => {}, files = {}, tzOffset = 0 } = {}) {
     const all = joinAnswers(answers);
     this.input = all.bytes;
     this.eofAt = all.eof;
     this.muteUntil = joinAnswers(answers.slice(0, -1)).bytes.length;
     this.files = new Map(Object.entries(files).map(([name, text]) => [name, utf8(text)]));
     this.strtok = null;
+    this.atexitFns = [];
+    this.errnoValue = 0;
+    this.errnoStore = null;
+    this.tzOffset = tzOffset;
+    this.builtinTypes = {};
     // 이미 답한 입력이 있으면, 그 답을 다 읽을 때까지의 출력은 앞에서 이미 보여줬어요.
     this.muted = answers.length > 0;
     this.pos = 0;
@@ -140,6 +150,20 @@ export class Runtime {
     const out = {};
     for (const [name, bytes] of this.files) out[name] = new TextDecoder().decode(Uint8Array.from(bytes));
     return out;
+  }
+
+  getErrno() {
+    return this.errnoStore ? this.errnoStore.cells[0] : this.errnoValue;
+  }
+
+  setErrno(v) {
+    if (this.errnoStore) this.errnoStore.cells[0] = v;
+    else this.errnoValue = v;
+  }
+
+  /** exit()나 main이 끝날 때 atexit로 등록한 함수를 거꾸로 불러요 */
+  runAtExit() {
+    while (this.atexitFns.length) this.callFn(this.atexitFns.pop(), [], 0, false);
   }
 
   callFn(ref, args, line, used = true, types = []) {
@@ -305,6 +329,7 @@ export class Runtime {
     const v = store.cells[off];
     if (v === undefined) return "?";
     if (v instanceof FnRef) return `→ 함수 ${v.fi.name}`;
+    if (type.k === "jmpbuf") return v && v.jmp ? "(돌아올 자리 저장됨)" : "?";
     if (type.k === "valist") return v ? `(가변 인자 ${v.args.length}개 중 ${v.i}개 꺼냄)` : "(비어 있음)";
     if (isPtr(type) && type.to.k === "file") return v === null ? "NULL" : `파일 ${v.name}`;
     if (isPtr(type)) {
@@ -763,7 +788,10 @@ function fopen(rt, nameP, modeP, line) {
     throw runtimeError(line, `fopen의 모드 "${mode}"를 알 수 없어요`, "읽기는 \"r\", 새로 쓰기는 \"w\", 이어 쓰기는 \"a\"를 써요.");
   }
   if (!name) throw runtimeError(line, "fopen에 파일 이름이 비어 있어요");
-  if (mode[0] === "r" && !rt.files.has(name)) return null;
+  if (mode[0] === "r" && !rt.files.has(name)) {
+    rt.setErrno(2);
+    return null;
+  }
   if (mode[0] === "w" || !rt.files.has(name)) rt.files.set(name, []);
   const data = rt.files.get(name);
   return {
@@ -1020,3 +1048,437 @@ export const BUILTINS = {
 
 export const isInputBuiltin = (name) => Boolean(BUILTINS[name] && BUILTINS[name].input);
 export { typeName, isInt, isFloat, is64, STDIN as stdinStream };
+
+// =====================================================================
+// 표준 라이브러리 더하기: sscanf, strtol, realloc, 바이너리 파일, time.h …
+// =====================================================================
+
+/** 값을 C의 실제 바이트 모양(리틀 엔디언, 구조체 빈칸 포함)으로 바꾸고 되돌려요 (fread/fwrite, memcmp 용). */
+function encodeScalar(t, v, view, at) {
+  if (t.k === "float") {
+    if (t.bits === 32) view.setFloat32(at, v ?? 0, true);
+    else view.setFloat64(at, v ?? 0, true);
+    return;
+  }
+  if (t.k !== "int") return; // 포인터 등은 0으로 둬요
+  const big = BigInt.asUintN(t.size * 8, BigInt(v ?? 0));
+  for (let i = 0; i < t.size; i++) view.setUint8(at + i, Number((big >> BigInt(8 * i)) & 0xffn));
+}
+
+function decodeScalar(t, view, at) {
+  if (t.k === "float") return t.bits === 32 ? view.getFloat32(at, true) : view.getFloat64(at, true);
+  if (t.k !== "int") return null;
+  let big = 0n;
+  for (let i = t.size - 1; i >= 0; i--) big = (big << 8n) | BigInt(view.getUint8(at + i));
+  return convert(big, T.ullong, t);
+}
+
+function serialize(t, cellsArr, off, view, at) {
+  if (isStruct(t)) {
+    const fields = t.isUnion ? t.fields.slice(0, 1) : t.fields;
+    for (const f of fields) if (!f.type.bitfield) serialize(f.type, cellsArr, off + f.off, view, at + f.byteOff);
+  } else if (isArr(t)) {
+    for (let i = 0; i < t.len; i++) serialize(t.of, cellsArr, off + i * cells(t.of), view, at + i * t.of.size);
+  } else encodeScalar(t, cellsArr[off], view, at);
+}
+
+function deserialize(t, cellsArr, off, view, at) {
+  if (isStruct(t)) {
+    const fields = t.isUnion ? t.fields.slice(0, 1) : t.fields;
+    for (const f of fields) if (!f.type.bitfield) deserialize(f.type, cellsArr, off + f.off, view, at + f.byteOff);
+  } else if (isArr(t)) {
+    for (let i = 0; i < t.len; i++) deserialize(t.of, cellsArr, off + i * cells(t.of), view, at + i * t.of.size);
+  } else {
+    const v = decodeScalar(t, view, at);
+    if (v !== null) cellsArr[off] = v;
+  }
+}
+
+/** 포인터가 가리키는 곳의 원소 타입과 칸 수 */
+function unitAt(rt, p, line) {
+  rt.check(p, line, false);
+  const st = p.store;
+  const elem = isArr(st.type) ? st.type.of : st.type;
+  const unit = cells(elem);
+  if (p.off % unit !== 0) {
+    throw runtimeError(line, "원소의 중간을 가리키는 주소로는 바이트 단위 작업을 할 수 없어요");
+  }
+  return { st, elem, unit };
+}
+
+/** p부터 n바이트를 읽어요 */
+function bytesOf(rt, p, n, line) {
+  const { st, elem, unit } = unitAt(rt, p, line);
+  const count = Math.ceil(n / elem.size);
+  if (p.off + count * unit > st.cells.length) rt.check(new Ptr(st, p.off + count * unit - 1), line, false);
+  const view = new DataView(new ArrayBuffer(count * elem.size));
+  for (let i = 0; i < count; i++) serialize(elem, st.cells, p.off + i * unit, view, i * elem.size);
+  return Array.from(new Uint8Array(view.buffer)).slice(0, n);
+}
+
+/** p부터 바이트들을 써요 (원소 크기의 배수만) */
+function writeBytes(rt, p, bytes, line) {
+  const { st, elem, unit } = unitAt(rt, p, line);
+  if (bytes.length % elem.size !== 0) {
+    throw runtimeError(line, `${elem.size}바이트짜리 원소에 ${bytes.length}바이트를 나눠 넣을 수 없어요`);
+  }
+  const count = bytes.length / elem.size;
+  if (p.off + count * unit > st.cells.length) rt.check(new Ptr(st, p.off + count * unit - 1), line, true);
+  rt.check(p, line, true);
+  const view = new DataView(Uint8Array.from(bytes).buffer);
+  for (let i = 0; i < count; i++) deserialize(elem, st.cells, p.off + i * unit, view, i * elem.size);
+}
+
+function stringReader(bytes) {
+  let i = 0;
+  return {
+    peek: () => (i < bytes.length ? bytes[i] : -1),
+    read: () => (i < bytes.length ? bytes[i++] : -1),
+    get pos() { return i; },
+  };
+}
+
+const ERRNO_TEXT = {
+  0: "Success", 2: "No such file or directory", 22: "Invalid argument",
+  33: "Numerical argument out of domain", 34: "Numerical result out of range",
+};
+
+function constString(rt, text) {
+  if (!rt.constStrings) rt.constStrings = new Map();
+  let st = rt.constStrings.get(text);
+  if (!st) {
+    const bytes = utf8(text);
+    st = new Store(bytes.length + 1, "문자열 상수", arr(T.char, bytes.length + 1));
+    bytes.forEach((b, i) => { st.cells[i] = convert(b, T.int, T.char); });
+    st.cells[bytes.length] = 0;
+    st.readonly = true;
+    rt.constStrings.set(text, st);
+  }
+  return new Ptr(st, 0);
+}
+
+function heapString(bytes) {
+  const st = new Store(bytes.length + 1, "malloc 메모리", arr(T.char, bytes.length + 1));
+  bytes.forEach((b, i) => { st.cells[i] = convert(b, T.int, T.char); });
+  st.cells[bytes.length] = 0;
+  st.heap = true;
+  st.elemSize = 1;
+  return new Ptr(st, 0);
+}
+
+/** strtol 계열: [값(BigInt), 읽은 글자 수] */
+function parseInteger(bytes, base) {
+  let i = 0;
+  while (i < bytes.length && isSpace(bytes[i])) i++;
+  let neg = false;
+  if (bytes[i] === 43 || bytes[i] === 45) { neg = bytes[i] === 45; i++; }
+  const hexPrefix = bytes[i] === 48 && (bytes[i + 1] === 120 || bytes[i + 1] === 88);
+  if ((base === 0 || base === 16) && hexPrefix && /[0-9a-fA-F]/.test(String.fromCharCode(bytes[i + 2] ?? 0))) { i += 2; base = 16; }
+  else if (base === 0) base = bytes[i] === 48 ? 8 : 10;
+  const start = i;
+  let v = 0n;
+  for (; i < bytes.length; i++) {
+    const d = parseInt(String.fromCharCode(bytes[i]), 36);
+    if (Number.isNaN(d) || d >= base) break;
+    v = v * BigInt(base) + BigInt(d);
+  }
+  if (i === start) return [0n, 0];
+  return [neg ? -v : v, i];
+}
+
+function parseDouble(bytes) {
+  const text = new TextDecoder().decode(Uint8Array.from(bytes));
+  const m = text.match(/^\s*[+-]?(?:inf(?:inity)?|nan|0[xX][0-9a-fA-F]*\.?[0-9a-fA-F]*(?:[pP][+-]?\d+)?|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/i);
+  if (!m) return [0, 0];
+  const s = m[0].trim().toLowerCase();
+  let v;
+  if (/inf/.test(s)) v = s.startsWith("-") ? -Infinity : Infinity;
+  else if (/nan/.test(s)) v = NaN;
+  else v = parseFloat(s);
+  return [v, utf8(m[0]).length];
+}
+
+function setEnd(rt, endp, base, used, line) {
+  if (endp !== null && endp !== undefined) rt.storeAt(endp, new Ptr(base.store, base.off + used), line);
+}
+
+const LONG_T = T.long;
+const tmFields = ["tm_sec", "tm_min", "tm_hour", "tm_mday", "tm_mon", "tm_year", "tm_wday", "tm_yday", "tm_isdst"];
+
+function tmFromDate(d) {
+  const start = Date.UTC(d.getUTCFullYear(), 0, 1);
+  return [d.getUTCSeconds(), d.getUTCMinutes(), d.getUTCHours(), d.getUTCDate(), d.getUTCMonth(),
+    d.getUTCFullYear() - 1900, d.getUTCDay(), Math.floor((d.getTime() - start) / 86400000), 0];
+}
+
+function tmStore(rt, name) {
+  if (!rt.tmStores) rt.tmStores = {};
+  if (!rt.tmStores[name]) {
+    const type = rt.builtinTypes.tm;
+    rt.tmStores[name] = new Store(cells(type), name, type);
+  }
+  return rt.tmStores[name];
+}
+
+function readTm(rt, p, line) {
+  return tmFields.map((_, i) => Number(rt.load(new Ptr(p.store, p.off + i), line)));
+}
+
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const FULL_DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const FULL_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const two = (n) => String(n).padStart(2, "0");
+
+function strftimeText(fmt, tm) {
+  const [sec, min, hour, mday, mon, year, wday, yday] = tm;
+  return fmt.replace(/%(.)/g, (m, c) => ({
+    Y: String(year + 1900), y: two((year + 1900) % 100), m: two(mon + 1), d: two(mday), e: String(mday).padStart(2, " "),
+    H: two(hour), I: two(hour % 12 || 12), M: two(min), S: two(sec), p: hour < 12 ? "AM" : "PM",
+    a: DAYS[wday], A: FULL_DAYS[wday], b: MONTHS[mon], B: FULL_MONTHS[mon], j: String(yday + 1).padStart(3, "0"),
+    F: `${year + 1900}-${two(mon + 1)}-${two(mday)}`, T: `${two(hour)}:${two(min)}:${two(sec)}`, "%": "%",
+    c: `${DAYS[wday]} ${MONTHS[mon]} ${String(mday).padStart(2, " ")} ${two(hour)}:${two(min)}:${two(sec)} ${year + 1900}`,
+  }[c] ?? m));
+}
+
+const mathF = (fn) => ({ header: "math.h", ret: T.float, params: [T.float], impl: (rt, [x]) => Math.fround(fn(x)) });
+const roundHalfEven = (x) => {
+  const r = Math.round(x);
+  return Math.abs(x % 1) === 0.5 && r % 2 !== 0 ? r - 1 : r;
+};
+
+Object.assign(BUILTINS, {
+  // ---------- stdio ----------
+  sscanf: { header: "stdio.h", ret: T.int, params: [charPtr, charPtr], variadic: true, format: "scanf", formatIndex: 1,
+    impl(rt, [s, fmt, ...targets], line, types) {
+      return doScanf(rt, stringReader(cstr(rt, s, line)), cstr(rt, fmt, line), targets, types.slice(2).map((t) => t.to), line);
+    } },
+  perror: { header: "stdio.h", ret: T.void, params: [charPtr],
+    impl(rt, [s], line) {
+      const prefix = s === null ? "" : textOf(rt, s, line);
+      rt.writeTo(STDERR, utf8(`${prefix ? `${prefix}: ` : ""}${ERRNO_TEXT[rt.getErrno()] ?? `Unknown error ${rt.getErrno()}`}\n`), line);
+    } },
+  fseek: { header: "stdio.h", ret: T.int, params: [FILE_T, T.long, T.int],
+    impl(rt, [f, off, whence], line) {
+      const h = rt.openHandle(f, line, "any");
+      const base = whence === 0 ? 0 : whence === 1 ? h.pos : h.data.length;
+      const pos = base + Number(off);
+      if (pos < 0) return -1;
+      h.pos = pos;
+      h.eof = false;
+      return 0;
+    } },
+  ftell: { header: "stdio.h", ret: T.long, params: [FILE_T], impl: (rt, [f], line) => BigInt(rt.openHandle(f, line, "any").pos) },
+  fwrite: { header: "stdio.h", ret: T.ulong, params: [voidPtr, T.ulong, T.ulong, FILE_T],
+    impl(rt, [p, size, n, f], line) {
+      const total = Number(size) * Number(n);
+      if (total === 0) return 0n;
+      rt.writeTo(f, bytesOf(rt, p, total, line), line);
+      return BigInt(n);
+    } },
+  fread: { header: "stdio.h", ret: T.ulong, params: [voidPtr, T.ulong, T.ulong, FILE_T],
+    impl(rt, [p, size, n, f], line) {
+      const src = rt.reader(f, line);
+      const sz = Number(size);
+      const bytes = [];
+      for (let i = 0; i < sz * Number(n); i++) {
+        const b = src.read();
+        if (b < 0) break;
+        bytes.push(b);
+      }
+      const whole = sz > 0 ? Math.floor(bytes.length / sz) : 0;
+      if (whole > 0) writeBytes(rt, p, bytes.slice(0, whole * sz), line);
+      return BigInt(whole);
+    } },
+  ungetc: { header: "stdio.h", ret: T.int, params: [T.int, FILE_T],
+    impl(rt, [c, f], line) {
+      if (c < 0) return -1;
+      if (f === STDIN) {
+        if (rt.pos > 0) rt.pos--;
+        return c;
+      }
+      const h = rt.openHandle(f, line, "any");
+      if (h.pos > 0) { h.pos--; h.data[h.pos] = c & 255; }
+      h.eof = false;
+      return c;
+    } },
+  getline: undefined,
+
+  // ---------- stdlib ----------
+  strtol: { header: "stdlib.h", ret: T.long, params: [charPtr, ptr(charPtr), T.int],
+    impl(rt, [s, e, base], line) { const [v, used] = parseInteger(cstr(rt, s, line), base); setEnd(rt, e, s, used, line); return convert(v, T.llong, T.long); } },
+  strtoll: { header: "stdlib.h", ret: T.llong, params: [charPtr, ptr(charPtr), T.int],
+    impl(rt, [s, e, base], line) { const [v, used] = parseInteger(cstr(rt, s, line), base); setEnd(rt, e, s, used, line); return convert(v, T.llong, T.llong); } },
+  strtoul: { header: "stdlib.h", ret: T.ulong, params: [charPtr, ptr(charPtr), T.int],
+    impl(rt, [s, e, base], line) { const [v, used] = parseInteger(cstr(rt, s, line), base); setEnd(rt, e, s, used, line); return BigInt.asUintN(64, v); } },
+  strtoull: { header: "stdlib.h", ret: T.ullong, params: [charPtr, ptr(charPtr), T.int],
+    impl(rt, [s, e, base], line) { const [v, used] = parseInteger(cstr(rt, s, line), base); setEnd(rt, e, s, used, line); return BigInt.asUintN(64, v); } },
+  strtod: { header: "stdlib.h", ret: D, params: [charPtr, ptr(charPtr)],
+    impl(rt, [s, e], line) { const [v, used] = parseDouble(cstr(rt, s, line)); setEnd(rt, e, s, used, line); return v; } },
+  strtof: { header: "stdlib.h", ret: T.float, params: [charPtr, ptr(charPtr)],
+    impl(rt, [s, e], line) { const [v, used] = parseDouble(cstr(rt, s, line)); setEnd(rt, e, s, used, line); return Math.fround(v); } },
+  atol: { header: "stdlib.h", ret: T.long, params: [charPtr], impl: (rt, [s], line) => convert(parseInteger(cstr(rt, s, line), 10)[0], T.llong, T.long) },
+  atoll: { header: "stdlib.h", ret: T.llong, params: [charPtr], impl: (rt, [s], line) => convert(parseInteger(cstr(rt, s, line), 10)[0], T.llong, T.llong) },
+  realloc: { header: "stdlib.h", ret: voidPtr, params: [voidPtr, T.ulong],
+    impl(rt, [p, size], line) {
+      const n = Number(size);
+      if (p === null) return malloc(rt, size, false, line);
+      if (!p.store.heap || p.off !== 0) throw runtimeError(line, "malloc으로 받지 않은 메모리를 realloc하려고 했어요");
+      if (p.store.freed) throw runtimeError(line, "free한 메모리를 realloc하려고 했어요");
+      if (n === 0) { p.store.freed = true; return null; }
+      const old = p.store;
+      const fresh = malloc(rt, size, false, line);
+      if (!old.untyped) {
+        retypeHeap(fresh, old.type.of, line);
+        const keep = Math.min(old.cells.length, fresh.store.cells.length);
+        for (let i = 0; i < keep; i++) fresh.store.cells[i] = old.cells[i];
+      }
+      old.freed = true;
+      return fresh;
+    } },
+  div: { header: "stdlib.h", ret: "div_t", params: [T.int, T.int],
+    impl(rt, [a, b], line) { if (b === 0) throw runtimeError(line, "0으로 나눴어요"); return [Math.trunc(a / b) | 0, (a % b) | 0]; } },
+  ldiv: { header: "stdlib.h", ret: "ldiv_t", params: [T.long, T.long],
+    impl(rt, [a, b], line) { if (b === 0n) throw runtimeError(line, "0으로 나눴어요"); return [a / b, a % b]; } },
+  lldiv: { header: "stdlib.h", ret: "lldiv_t", params: [T.llong, T.llong],
+    impl(rt, [a, b], line) { if (b === 0n) throw runtimeError(line, "0으로 나눴어요"); return [a / b, a % b]; } },
+  abort: { header: "stdlib.h", ret: T.void, params: [],
+    impl(rt, args, line) { throw runtimeError(line, "abort()로 프로그램을 멈췄어요", "abort는 프로그램을 바로 비정상 종료시켜요."); } },
+  atexit: { header: "stdlib.h", ret: T.int, params: [{ k: "ptr", to: { k: "func", ret: T.void, params: [] }, size: 8 }],
+    impl(rt, [fn]) { rt.atexitFns.push(fn); return 0; } },
+  getenv: { header: "stdlib.h", ret: charPtr, params: [charPtr], impl: () => null },
+  system: { header: "stdlib.h", ret: T.int, params: [charPtr],
+    impl(rt, args, line) { throw runtimeError(line, "system()은 이 앱에서 쓸 수 없어요", "아이패드 브라우저 안에서는 다른 프로그램을 실행할 수 없어요."); } },
+
+  // ---------- string ----------
+  memmove: { writes: [0], header: "string.h", ret: voidPtr, params: [voidPtr, voidPtr, T.ulong],
+    impl(rt, [d, s, n], line) { if (Number(n) > 0) writeBytes(rt, d, bytesOf(rt, s, Number(n), line), line); return d; } },
+  memcmp: { header: "string.h", ret: T.int, params: [voidPtr, voidPtr, T.ulong],
+    impl(rt, [a, b, n], line) {
+      const x = bytesOf(rt, a, Number(n), line);
+      const y = bytesOf(rt, b, Number(n), line);
+      for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1;
+      return 0;
+    } },
+  memchr: { header: "string.h", ret: voidPtr, params: [voidPtr, T.int, T.ulong],
+    impl(rt, [p, c, n], line) {
+      const bytes = bytesOf(rt, p, Number(n), line);
+      const i = bytes.indexOf(c & 255);
+      return i < 0 ? null : new Ptr(p.store, p.off + i);
+    } },
+  strspn: { header: "string.h", ret: T.ulong, params: [charPtr, charPtr],
+    impl(rt, [s, a], line) { const set = new Set(cstr(rt, a, line)); const b = cstr(rt, s, line); let i = 0; while (i < b.length && set.has(b[i])) i++; return BigInt(i); } },
+  strcspn: { header: "string.h", ret: T.ulong, params: [charPtr, charPtr],
+    impl(rt, [s, r], line) { const set = new Set(cstr(rt, r, line)); const b = cstr(rt, s, line); let i = 0; while (i < b.length && !set.has(b[i])) i++; return BigInt(i); } },
+  strpbrk: { header: "string.h", ret: charPtr, params: [charPtr, charPtr],
+    impl(rt, [s, a], line) { const set = new Set(cstr(rt, a, line)); const i = cstr(rt, s, line).findIndex((b) => set.has(b)); return i < 0 ? null : new Ptr(s.store, s.off + i); } },
+  strdup: { header: "string.h", ret: charPtr, params: [charPtr], impl: (rt, [s], line) => heapString(cstr(rt, s, line)) },
+  strndup: { header: "string.h", ret: charPtr, params: [charPtr, T.ulong], impl: (rt, [s, n], line) => heapString(cstr(rt, s, line).slice(0, Number(n))) },
+  strerror: { header: "string.h", ret: charPtr, params: [T.int], impl: (rt, [e]) => constString(rt, ERRNO_TEXT[e] ?? `Unknown error ${e}`) },
+  strcoll: { header: "string.h", ret: T.int, params: [charPtr, charPtr], impl: (rt, args, line) => BUILTINS.strcmp.impl(rt, args, line) },
+
+  // ---------- math ----------
+  isnan: { header: "math.h", ret: T.int, params: [D], impl: (rt, [x]) => (Number.isNaN(x) ? 1 : 0) },
+  isinf: { header: "math.h", ret: T.int, params: [D], impl: (rt, [x]) => (x === Infinity ? 1 : x === -Infinity ? -1 : 0) },
+  isfinite: { header: "math.h", ret: T.int, params: [D], impl: (rt, [x]) => (Number.isFinite(x) ? 1 : 0) },
+  signbit: { header: "math.h", ret: T.int, params: [D], impl: (rt, [x]) => (x < 0 || Object.is(x, -0) ? 1 : 0) },
+  modf: { header: "math.h", ret: D, params: [D, ptr(D)],
+    impl(rt, [x, ip], line) { const i = Math.trunc(x); rt.storeAt(ip, i, line); return x - i; } },
+  frexp: { header: "math.h", ret: D, params: [D, ptr(T.int)],
+    impl(rt, [x, ep], line) {
+      if (x === 0 || !Number.isFinite(x)) { rt.storeAt(ep, 0, line); return x; }
+      const e = Math.floor(Math.log2(Math.abs(x))) + 1;
+      rt.storeAt(ep, e, line);
+      return x / 2 ** e;
+    } },
+  ldexp: { header: "math.h", ret: D, params: [D, T.int], impl: (rt, [x, e]) => x * 2 ** e },
+  exp2: mathFn((x) => 2 ** x), log1p: mathFn(Math.log1p), expm1: mathFn(Math.expm1),
+  sinh: mathFn(Math.sinh), cosh: mathFn(Math.cosh), tanh: mathFn(Math.tanh),
+  asinh: mathFn(Math.asinh), acosh: mathFn(Math.acosh), atanh: mathFn(Math.atanh),
+  rint: mathFn(roundHalfEven), nearbyint: mathFn(roundHalfEven),
+  lround: { header: "math.h", ret: T.long, params: [D], impl: (rt, [x]) => BigInt(x < 0 ? -Math.round(-x) : Math.round(x)) },
+  llround: { header: "math.h", ret: T.llong, params: [D], impl: (rt, [x]) => BigInt(x < 0 ? -Math.round(-x) : Math.round(x)) },
+  lrint: { header: "math.h", ret: T.long, params: [D], impl: (rt, [x]) => BigInt(roundHalfEven(x)) },
+  copysign: math2((x, y) => (y < 0 || Object.is(y, -0) ? -Math.abs(x) : Math.abs(x))),
+  fdim: math2((x, y) => (x > y ? x - y : 0)),
+  fma: { header: "math.h", ret: D, params: [D, D, D], impl: (rt, [x, y, z]) => x * y + z },
+  sqrtf: mathF(Math.sqrt), fabsf: mathF(Math.abs), floorf: mathF(Math.floor), ceilf: mathF(Math.ceil),
+  roundf: mathF((x) => (x < 0 ? -Math.round(-x) : Math.round(x))), sinf: mathF(Math.sin), cosf: mathF(Math.cos),
+  tanf: mathF(Math.tan), expf: mathF(Math.exp), logf: mathF(Math.log),
+  powf: { header: "math.h", ret: T.float, params: [T.float, T.float], impl: (rt, [x, y]) => Math.fround(x ** y) },
+
+  // ---------- ctype ----------
+  isprint: ctypeFn((c) => (c >= 32 && c < 127 ? 1 : 0)),
+  iscntrl: ctypeFn((c) => ((c >= 0 && c < 32) || c === 127 ? 1 : 0)),
+  isgraph: ctypeFn((c) => (c > 32 && c < 127 ? 1 : 0)),
+  isblank: ctypeFn((c) => (c === 32 || c === 9 ? 1 : 0)),
+
+  // ---------- time ----------
+  gmtime: { header: "time.h", ret: "tm*", params: [ptr(T.long)],
+    impl(rt, [tp], line) {
+      const st = tmStore(rt, "gmtime 결과");
+      tmFromDate(new Date(Number(rt.load(tp, line)) * 1000)).forEach((v, i) => { st.cells[i] = v; });
+      return new Ptr(st, 0);
+    } },
+  localtime: { header: "time.h", ret: "tm*", params: [ptr(T.long)],
+    impl(rt, [tp], line) {
+      const st = tmStore(rt, "localtime 결과");
+      tmFromDate(new Date((Number(rt.load(tp, line)) - rt.tzOffset * 60) * 1000)).forEach((v, i) => { st.cells[i] = v; });
+      return new Ptr(st, 0);
+    } },
+  mktime: { header: "time.h", ret: T.long, params: ["tm*"],
+    impl(rt, [p], line) {
+      const [sec, min, hour, mday, mon, year] = readTm(rt, p, line);
+      const ms = Date.UTC(year + 1900, mon, mday, hour, min, sec);
+      const fixed = tmFromDate(new Date(ms));
+      fixed.forEach((v, i) => rt.storeAt(new Ptr(p.store, p.off + i), v, line));
+      return BigInt(Math.floor(ms / 1000) + rt.tzOffset * 60);
+    } },
+  difftime: { header: "time.h", ret: D, params: [T.long, T.long], impl: (rt, [a, b]) => Number(a - b) },
+  strftime: { writes: [0], header: "time.h", ret: T.ulong, params: [charPtr, T.ulong, charPtr, "tm*"],
+    impl(rt, [buf, max, fmt, p], line) {
+      const bytes = utf8(strftimeText(textOf(rt, fmt, line), readTm(rt, p, line)));
+      if (bytes.length + 1 > Number(max)) return 0n;
+      rt.writeCString(buf, bytes, line);
+      return BigInt(bytes.length);
+    } },
+  asctime: { header: "time.h", ret: charPtr, params: ["tm*"],
+    impl: (rt, [p], line) => constString(rt, `${strftimeText("%c", readTm(rt, p, line))}\n`) },
+  ctime: { header: "time.h", ret: charPtr, params: [ptr(T.long)],
+    impl(rt, [tp], line) {
+      const tm = tmFromDate(new Date((Number(rt.load(tp, line)) - rt.tzOffset * 60) * 1000));
+      return constString(rt, `${strftimeText("%c", tm)}\n`);
+    } },
+
+  // ---------- setjmp ----------
+  setjmp: { header: "setjmp.h", ret: T.int, params: ["jmpbuf*"],
+    impl(rt, [b], line) {
+      if (!rt.jmpCtx) {
+        throw runtimeError(line, "setjmp는 문장 맨 바깥에서 써 주세요", "예: if (setjmp(buf) == 0) { ... }  또는  int r = setjmp(buf);");
+      }
+      rt.storeAt(b, { jmp: rt.jmpCtx }, line);
+      const v = rt.jumpValue;
+      rt.jumpValue = undefined;
+      return v ?? 0;
+    } },
+  longjmp: { header: "setjmp.h", ret: T.void, params: ["jmpbuf*", T.int],
+    impl(rt, [b, v], line) {
+      rt.check(b, line, false);
+      const cell = b.store.cells[b.off];
+      if (!cell || !cell.jmp) throw runtimeError(line, "setjmp를 부르지 않은 jmp_buf로 longjmp를 했어요", "먼저 setjmp(buf)로 돌아올 자리를 정해 주세요.");
+      if (cell.jmp.token.dead) {
+        throw runtimeError(line, "이미 끝난 블록(함수)의 setjmp 자리로는 돌아갈 수 없어요", "setjmp를 부른 함수가 아직 실행 중일 때만 longjmp로 돌아갈 수 있어요.");
+      }
+      throw new JumpSignal(cell.jmp, v === 0 ? 1 : v);
+    } },
+
+  // ---------- assert ----------
+  __assert_check: { header: "assert.h", ret: T.void, params: [T.int, charPtr, T.int],
+    impl(rt, [ok, text, at]) {
+      if (!ok) {
+        throw runtimeError(at, `assert가 실패했어요: ${textOf(rt, text, at)}`,
+          "assert(조건)의 조건이 거짓이라 프로그램을 멈췄어요. 조건이 왜 거짓이 되었는지 확인해 보세요.");
+      }
+    } },
+});
+delete BUILTINS.getline;

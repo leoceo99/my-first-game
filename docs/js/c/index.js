@@ -36,9 +36,10 @@ function collectVariables(rt, program) {
   return out;
 }
 
-function errorInfo(e) {
+function errorInfo(e, dialect = "c") {
+  const lang = dialect === "cpp" ? "C++" : "C";
   return {
-    type: e.kind === "compile" ? "C 컴파일 오류" : "C 실행 오류",
+    type: e.kind === "compile" ? `${lang} 컴파일 오류` : `${lang} 실행 오류`,
     title: e.title,
     detail: e.detail,
     message: "",
@@ -51,28 +52,37 @@ function errorInfo(e) {
  * C 코드를 실행해요.
  * answers: 지금까지 받은 입력들. 입력이 더 필요하면 onInput(질문)을 부르고 status "waiting"을 돌려줘요.
  */
-export function runC(source, { answers = [], startTime, files = {}, onOutput = () => {}, onInput = () => {} } = {}) {
-  const rt = new Runtime({ answers, startTime, onOutput, files });
+export function runC(source, { answers = [], startTime, files = {}, tzOffset = 0, dialect = "c", onOutput = () => {}, onInput = () => {} } = {}) {
+  const rt = new Runtime({ answers, startTime, onOutput, files, tzOffset });
   const started = Date.now();
   let program = null;
   try {
-    const { tokens, includes } = tokenize(source);
-    const ast = parse(tokens, includes);
-    program = new Compiler(rt, includes).compile(ast);
+    const { tokens, includes } = tokenize(source, { dialect });
+    const ast = parse(tokens, includes, { dialect });
+    program = new Compiler(rt, includes, { dialect }).compile(ast);
   } catch (e) {
-    if (e instanceof CError) return { status: "error", error: errorInfo(e), variables: [], exitCode: 1 };
+    if (e instanceof CError) return { status: "error", error: errorInfo(e, dialect), variables: [], exitCode: 1 };
     throw e;
   }
 
   const seconds = () => Math.round(Date.now() - started) / 1000;
   try {
     const code = program.run();
+    rt.runAtExit();
     rt.finish();
     return { status: "ok", exitCode: code, seconds: seconds(), variables: collectVariables(rt, program), files: rt.fileTexts() };
-  } catch (e) {
+  } catch (thrown) {
+    let e = thrown;
     if (e === NEED_INPUT) {
       onInput(rt.takePrompt());
       return { status: "waiting", variables: [] };
+    }
+    if (e instanceof ExitSignal) {
+      try {
+        rt.runAtExit();
+      } catch (inner) {
+        if (!(inner instanceof ExitSignal)) e = inner;
+      }
     }
     rt.finish();
     if (e instanceof ExitSignal) {
@@ -84,6 +94,6 @@ export function runC(source, { answers = [], startTime, files = {}, onOutput = (
     } else if (!(e instanceof CError)) {
       err = runtimeError(rt.line, "실행기 내부 오류가 났어요", `C 실행기가 아직 처리하지 못하는 코드예요. (${e && e.message})`);
     }
-    return { status: "error", error: errorInfo(err), seconds: seconds(), variables: collectVariables(rt, program), exitCode: 1, files: rt.fileTexts() };
+    return { status: "error", error: errorInfo(err, dialect), seconds: seconds(), variables: collectVariables(rt, program), exitCode: 1, files: rt.fileTexts() };
   }
 }

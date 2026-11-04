@@ -113,9 +113,25 @@ export function explainError(error) {
       break;
     }
     case "ModuleNotFoundError":
-    case "ImportError":
+    case "ImportError": {
+      const mod = quoted(message) || "";
+      const top = mod.split(".")[0];
       title = "모듈을 불러올 수 없어요";
-      detail = "이름에 오타가 있는지 확인해 보세요. 이 앱에서는 파이썬 기본 모듈(random, math 등)을 쓸 수 있어요.";
+      if (top === "turtle" || top === "tkinter") {
+        title = `${top}는 아직 이 앱에서 쓸 수 없어요`;
+        detail = "그림이나 창을 띄우는 모듈은 아이패드 브라우저 안에서 아직 지원하지 않아요.";
+      } else {
+        detail = "이름에 오타가 있는지 확인해 보세요. 파이썬 기본 모듈(random, math 등)과 numpy 같은 유명 패키지를 쓸 수 있어요. 외부 패키지는 처음 한 번 인터넷이 필요해요.";
+      }
+      break;
+    }
+    case "RuntimeError":
+      if (/can't start new thread/.test(message)) {
+        title = "스레드는 쓸 수 없어요";
+        detail = "브라우저 속 파이썬은 스레드(threading)를 만들 수 없어요. 차례대로 실행하거나 asyncio를 써 보세요.";
+      } else {
+        title = "실행 중에 문제가 생겼어요";
+      }
       break;
     case "RecursionError":
       title = "함수가 끝없이 자기 자신을 불러요";

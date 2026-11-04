@@ -4,10 +4,32 @@ import { compileError, T, utf8 } from "./types.js";
 
 export const HEADERS = new Set([
   "stdio.h", "stdlib.h", "string.h", "math.h", "ctype.h", "stdbool.h", "time.h", "limits.h", "stddef.h", "stdarg.h",
+  "stdint.h", "inttypes.h", "assert.h", "float.h", "errno.h", "setjmp.h", "iso646.h",
 ]);
 
+// C++에서 쓰는 C 헤더 이름 (<cstdio> = <stdio.h>)
+export const CPP_C_HEADERS = {
+  cstdio: "stdio.h", cstdlib: "stdlib.h", cstring: "string.h", cmath: "math.h", cctype: "ctype.h", ctime: "time.h",
+  climits: "limits.h", cstddef: "stddef.h", cstdarg: "stdarg.h", cstdint: "stdint.h", cinttypes: "inttypes.h",
+  cassert: "assert.h", cfloat: "float.h", cerrno: "errno.h", csetjmp: "setjmp.h", cstdbool: "stdbool.h",
+};
+
+// C++ 표준 라이브러리 헤더: C++ 도입 단계에서 하나씩 만들 예정이에요 (design/cpp-plan.md)
+export const CPP_LIBRARY_HEADERS = new Set([
+  "iostream", "string", "vector", "algorithm", "map", "set", "unordered_map", "unordered_set", "queue", "stack",
+  "deque", "list", "utility", "sstream", "fstream", "iomanip", "memory", "functional", "numeric", "array", "tuple",
+  "bits/stdc++.h",
+]);
+
+// 아직 준비 중인 C++ 낱말들과 그 단계
+export const CPP_PENDING = {
+  class: 3, public: 3, private: 3, protected: 3, this: 3, virtual: 6, friend: 3, operator: 4, explicit: 3, mutable: 3,
+  new: 2, delete: 2, namespace: 2, using: 2, template: 5, typename: 5, try: 6, catch: 6, throw: 6,
+  constexpr: 2, auto: 2, decltype: 5, static_cast: 2, const_cast: 2, reinterpret_cast: 2, dynamic_cast: 6,
+};
+
 const PUNCTUATORS = [
-  "...", "<<=", ">>=", "->", "++", "--", "<<", ">>", "<=", ">=", "==", "!=", "&&", "||",
+  "...", "<<=", ">>=", "->", "::", "++", "--", "<<", ">>", "<=", ">=", "==", "!=", "&&", "||",
   "+=", "-=", "*=", "/=", "%=", "&=", "^=", "|=", "##",
   ";", ",", "{", "}", "(", ")", "[", "]", ".", "&", "*", "+", "-", "~", "!", "/", "%",
   "<", ">", "^", "|", "?", ":", "=", "#",
@@ -22,7 +44,7 @@ const LIMITS = {
 
 const IDENT_START = /[\p{L}_]/u;
 const IDENT_CHAR = /[\p{L}\p{N}_]/u;
-const NUMBER = /^(?:0[xX][0-9a-fA-F]+|0[bB][01]+|(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?)[uUlLfF]*/;
+const NUMBER = /^(?:0[xX](?:[0-9a-fA-F]+\.?[0-9a-fA-F]*|\.[0-9a-fA-F]+)[pP][+-]?\d+|0[xX][0-9a-fA-F]+|0[bB][01]+|(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?)[uUlLfF]*/;
 
 const SIMPLE_ESCAPES = { n: 10, t: 9, r: 13, 0: 0, "\\": 92, "'": 39, '"': 34, a: 7, b: 8, f: 12, v: 11, "?": 63 };
 
@@ -49,6 +71,16 @@ function numberToken(text, line, col) {
   const suffix = m[0].toLowerCase();
   const body = text.slice(0, text.length - m[0].length);
   const isHex = /^0[xX]/.test(body);
+  if (isHex && /[pP]/.test(body)) {
+    // 16진 실수: 0x1.8p3 = 1.5 × 2³
+    const [, mant, exp] = body.match(/^0[xX]([0-9a-fA-F.]+)[pP]([+-]?\d+)$/);
+    const [whole, frac = ""] = mant.split(".");
+    let value = parseInt(whole || "0", 16);
+    for (let k = 0; k < frac.length; k++) value += parseInt(frac[k], 16) / 16 ** (k + 1);
+    value *= 2 ** Number(exp);
+    const type = suffix.includes("f") ? T.float : T.double;
+    return { k: "num", type, value: type === T.float ? Math.fround(value) : value, text, line, col };
+  }
   const isFloat = !isHex && (/[.eE]/.test(body) || suffix.includes("f"));
   if (isFloat) {
     if (/[ul]/.test(suffix.replace("l", "")) && suffix !== "l") throw compileError(line, `'${text}'는 올바른 숫자가 아니에요`);
@@ -116,7 +148,16 @@ function rawTokens(src, inMacro = false) {
     if (IDENT_START.test(c)) {
       let j = i + 1;
       while (j < n && IDENT_CHAR.test(src[j])) j++;
-      tokens.push({ k: "id", v: src.slice(i, j), line, col, raw: src.slice(i, j), ws });
+      const word = src.slice(i, j);
+      if ((src[j] === '"' || src[j] === "'") && ["u8", "L", "u", "U"].includes(word)) {
+        if (src[j] === '"' && word !== "u8") {
+          throw compileError(line, `넓은 문자열(${word}"...")은 아직 지원하지 않아요`, "보통 문자열 \"...\" 이나 u8\"...\" 를 써 주세요.");
+        }
+        i = j; // u8"..." 와 L'a' 는 보통 문자열·글자와 같아요
+        space = ws;
+        continue;
+      }
+      tokens.push({ k: "id", v: word, line, col, raw: word, ws });
       i = j;
       continue;
     }
@@ -305,10 +346,26 @@ function evalCondition(text, line, macros) {
   return v;
 }
 
+/** C++ 모드: 아직 만들지 않은 C++ 기능은 단계와 함께 알려 줘요. */
+function checkCppTokens(tokens) {
+  for (const t of tokens) {
+    if (t.k === "op" && t.v === "::") {
+      throw compileError(t.line, "이름공간(std::)과 :: 는 C++ 2단계에서 지원해요", "지금 C++ 모드에서는 C 방식의 코드를 쓸 수 있어요.");
+    }
+    if (t.k === "id" && Object.hasOwn(CPP_PENDING, t.v)) {
+      throw compileError(t.line, `C++의 '${t.v}'는 아직 준비 중이에요 (C++ ${CPP_PENDING[t.v]}단계)`,
+        "지금 C++ 모드에서는 C 방식의 코드에 bool, nullptr, 구조체 이름을 타입으로 쓰기를 더해서 쓸 수 있어요.");
+    }
+  }
+}
+
 /** 소스 코드를 전처리하고 토큰 목록을 만들어요. */
-export function tokenize(src) {
+export function tokenize(src, { dialect = "c" } = {}) {
+  const cpp = dialect === "cpp";
   const { tokens, directives, lastLine } = rawTokens(src);
   const includes = new Set();
+  if (cpp) includes.add("stdbool.h"); // C++에서는 bool, true, false가 기본이에요
+  const cppMacro = cpp ? [["__cplusplus", "201703L"]] : [];
   const macros = new Map();
   for (const [name, value] of Object.entries(LIMITS)) {
     const { tokens: body } = rawTokens(value);
@@ -320,6 +377,35 @@ export function tokenize(src) {
   }
   macros.set("M_PI", { name: "M_PI", params: null, body: rawTokens("3.14159265358979323846").tokens, header: "math.h" });
   macros.set("EOF", { name: "EOF", params: null, body: rawTokens("(-1)").tokens, header: "stdio.h" });
+  for (const [name, value] of cppMacro) macros.set(name, { name, params: null, body: rawTokens(value).tokens });
+  const predefine = (header, table) => {
+    for (const [name, value] of Object.entries(table)) {
+      macros.set(name, { name, params: null, body: rawTokens(value, true).tokens, header });
+    }
+  };
+  predefine("stdio.h", { SEEK_SET: "0", SEEK_CUR: "1", SEEK_END: "2", BUFSIZ: "8192" });
+  predefine("math.h", { INFINITY: "(1.0/0.0)", NAN: "(0.0/0.0)", HUGE_VAL: "(1.0/0.0)", M_E: "2.71828182845904523536", M_SQRT2: "1.41421356237309504880" });
+  predefine("float.h", {
+    FLT_MAX: "3.40282347e+38F", FLT_MIN: "1.17549435e-38F", FLT_EPSILON: "1.19209290e-7F", FLT_DIG: "6", FLT_MANT_DIG: "24",
+    DBL_MAX: "1.7976931348623157e+308", DBL_MIN: "2.2250738585072014e-308", DBL_EPSILON: "2.2204460492503131e-16",
+    DBL_DIG: "15", DBL_MANT_DIG: "53",
+  });
+  predefine("stdint.h", {
+    INT8_MIN: "(-128)", INT8_MAX: "127", UINT8_MAX: "255", INT16_MIN: "(-32768)", INT16_MAX: "32767", UINT16_MAX: "65535",
+    INT32_MIN: "(-2147483647-1)", INT32_MAX: "2147483647", UINT32_MAX: "4294967295u",
+    INT64_MIN: "(-9223372036854775807LL-1)", INT64_MAX: "9223372036854775807LL", UINT64_MAX: "18446744073709551615ULL",
+    SIZE_MAX: "18446744073709551615UL",
+  });
+  const pri = {};
+  for (const [c, l] of [["d", ""], ["i", ""], ["u", ""], ["x", ""], ["X", ""], ["o", ""]]) {
+    for (const bits of [8, 16, 32]) pri[`PRI${c}${bits}`] = `"${l}${c}"`;
+    pri[`PRI${c}64`] = `"ll${c}"`;
+    pri[`SCN${c}32`] = `"${c}"`;
+    pri[`SCN${c}64`] = `"ll${c}"`;
+  }
+  predefine("inttypes.h", pri);
+  predefine("errno.h", { EDOM: "33", ERANGE: "34", EINVAL: "22", ENOENT: "2" });
+  predefine("iso646.h", { and: "&&", or: "||", not: "!", not_eq: "!=", and_eq: "&=", or_eq: "|=", bitand: "&", bitor: "|", xor: "^", compl: "~" });
 
   // 지시문이 적용되는 위치(토큰 번호)에 따라 정의가 바뀌므로, 지시문과 토큰을 순서대로 처리해요.
   const out = [];
@@ -366,11 +452,23 @@ export function tokenize(src) {
     if (word === "include") {
       const m = text.match(/^include\s*[<"]([^>"]+)[>"]$/);
       if (!m) throw compileError(line, "#include 문장이 올바르지 않아요", "예: #include <stdio.h>");
+      if (cpp && CPP_LIBRARY_HEADERS.has(m[1])) {
+        throw compileError(line, `C++ 표준 라이브러리 <${m[1]}>는 다음 단계에서 지원해요`,
+          "지금 C++ 모드에서는 C 방식(printf, scanf, <cstdio>, <cstring>, <cmath> 등)으로 쓸 수 있어요.");
+      }
+      if (cpp && CPP_C_HEADERS[m[1]]) m[1] = CPP_C_HEADERS[m[1]];
       if (!HEADERS.has(m[1])) {
         throw compileError(line, `<${m[1]}> 헤더는 아직 지원하지 않아요`,
           `쓸 수 있는 헤더: ${[...HEADERS].map((h) => `<${h}>`).join(", ")}`);
       }
       includes.add(m[1]);
+      if (m[1] === "inttypes.h") includes.add("stdint.h");
+      if (m[1] === "assert.h") {
+        // assert(조건): NDEBUG가 정해져 있으면 아무 일도 하지 않아요
+        const body = macros.has("NDEBUG") ? "((void)0)" : "__assert_check((e), #e, __LINE__)";
+        macros.set("assert", { name: "assert", params: ["e"], body: rawTokens(body, true).tokens.map((t) => ({ ...t, line })) });
+        macros.set("static_assert", { name: "static_assert", params: null, body: rawTokens("_Static_assert", true).tokens });
+      }
     } else if (word === "define") {
       const macro = parseDefine(text, line);
       macros.set(macro.name, macro);
@@ -391,6 +489,10 @@ export function tokenize(src) {
       if (tok.k === "id" && tok.v === "__LINE__") outList.push({ k: "num", type: T.int, value: tok.line, text: String(tok.line), raw: String(tok.line), line: tok.line, col: tok.col });
       else if (tok.k === "id" && tok.v === "__FILE__") outList.push({ k: "str", bytes: utf8("main.c"), raw: '"main.c"', line: tok.line, col: tok.col });
       else outList.push(tok);
+      return i + 1;
+    }
+    if (macro.header && !includes.has(macro.header) && !/^[A-Z_][A-Z0-9_]*$/.test(macro.name)) {
+      outList.push(tok); // 소문자 이름(and, or 등)은 헤더가 없으면 그냥 이름이에요
       return i + 1;
     }
     if (macro.header && !includes.has(macro.header)) {
@@ -481,5 +583,6 @@ export function tokenize(src) {
     throw compileError(conds[conds.length - 1].line, "#if 가 #endif 로 닫히지 않았어요", "끝에 #endif 를 넣어 주세요.");
   }
   out.push({ k: "eof", v: "<끝>", line: lastLine, col: 1 });
+  if (cpp) checkCppTokens(out);
   return { tokens: out, includes };
 }

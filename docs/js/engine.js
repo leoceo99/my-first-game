@@ -44,7 +44,7 @@ export class Engine {
 
   start() {
     this.worker?.terminate();
-    const file = this.lang === "c" ? "../c-worker.js" : "../worker.js";
+    const file = this.lang === "c" || this.lang === "cpp" ? "../c-worker.js" : "../worker.js";
     const worker = new Worker(new URL(file, import.meta.url), { type: "module" });
     this.worker = worker;
     this.current = null;
@@ -133,6 +133,7 @@ export class Engine {
     this.setState("running");
     this.worker.postMessage({
       type: "run", runId: run.runId, code: run.code, answers: run.answers, seed: run.seed, time: run.time, files: run.files,
+      lang: this.lang,
     });
   }
 

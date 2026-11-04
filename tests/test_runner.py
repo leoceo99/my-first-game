@@ -35,9 +35,10 @@ class FakeBridge:
         return "".join(t for s, t in self.events if s == stream)
 
 
-def run(code, answers=(), mode="block", bridge=None, seed=1):
+def run(code, answers=(), mode="block", bridge=None, seed=1, files=None):
     bridge = bridge or FakeBridge()
-    result = json.loads(runner.run(textwrap.dedent(code), json.dumps(list(answers)), seed, mode, bridge))
+    result = json.loads(runner.run(textwrap.dedent(code), json.dumps(list(answers)), seed, mode, bridge,
+                                   json.dumps(files or {})))
     return result, bridge
 
 
@@ -123,6 +124,48 @@ class ErrorTest(unittest.TestCase):
             b = Bad()
         """)
         self.assertIn("RuntimeError", {v["name"]: v["value"] for v in result["variables"]}["b"])
+
+
+class EnvironmentTest(unittest.TestCase):
+    def test_asyncio_run(self):
+        result, bridge = run("""
+            import asyncio
+            async def twice(x):
+                await asyncio.sleep(0.001)
+                return x * 2
+            async def main():
+                task = asyncio.create_task(twice(5))
+                return await asyncio.gather(twice(1), twice(2)), await task
+            print(asyncio.run(main()))
+        """)
+        self.assertEqual(result["status"], "ok", result["error"])
+        self.assertEqual(bridge.text(), "([2, 4], 10)\n")
+
+    def test_files_are_shared_and_not_duplicated_on_replay(self):
+        code = """
+            with open("log.txt", "a", encoding="utf-8") as f:
+                f.write("한 줄\\n")
+            name = input("?")
+            print(open("memo.txt", encoding="utf-8").read().strip(), name)
+        """
+        shown = FakeBridge()
+        result, _ = run(code, [], mode="replay", bridge=shown, files={"memo.txt": "메모\n"})
+        self.assertEqual(result["status"], "waiting")
+        result, _ = run(code, ["철수"], mode="replay", bridge=shown, files={"memo.txt": "메모\n"})
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["files"], {"memo.txt": "메모\n", "log.txt": "한 줄\n"})
+        self.assertEqual(shown.text(), "메모 철수\n")
+
+    def test_cwd_is_restored(self):
+        before = os.getcwd()
+        run("import os\nos.listdir('.')")
+        self.assertEqual(os.getcwd(), before)
+
+    def test_sys_stdin(self):
+        code = "import sys\nfirst = sys.stdin.readline()\nrest = sys.stdin.read()\nprint(repr(first), repr(rest))"
+        result, bridge = run(code, ["a", "b", "c", None], mode="replay")
+        self.assertEqual(result["status"], "ok", result["error"])
+        self.assertEqual(bridge.text(), "'a\\n' 'b\\nc\\n'\n")
 
 
 class InputTest(unittest.TestCase):

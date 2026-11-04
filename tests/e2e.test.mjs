@@ -327,3 +327,50 @@ test("C: 입력 끝(EOF) 버튼, 파일은 변수 탭에 남아요", { skip: !ha
   assert.deepEqual(errors, []);
   await context.close();
 });
+
+test("파이썬 asyncio·sys.stdin, 파이썬이 만든 파일을 C가 읽고, .cpp 파일은 C++ 모드로 열려요", { skip: !haveEngine }, async () => {
+  const { context, page, errors } = await openApp({ serviceWorkers: "block" });
+  await page.click("#btn-drawer");
+  await page.click("#btn-new-python");
+  await setCode(page, [
+    "import asyncio, sys",
+    "async def twice(x):",
+    "    await asyncio.sleep(0)",
+    "    return x * 2",
+    "print(asyncio.run(twice(21)))",
+    "line = sys.stdin.readline().strip()",
+    "open('shared.txt', 'w').write(line + '\\n')",
+    "print('저장', line)",
+  ].join("\n"));
+  await page.click("#btn-run");
+  await answer(page, "파이썬에서 왔어요");
+  await waitIdle(page);
+  assert.match(await consoleText(page), /42[\s\S]*저장 파이썬에서 왔어요/);
+
+  await page.click("#btn-drawer");
+  await page.click("#btn-new-c");
+  await setCode(page, [
+    "#include <stdio.h>",
+    "int main(void) {",
+    "    char s[100];",
+    "    FILE *f = fopen(\"shared.txt\", \"r\");",
+    "    fgets(s, sizeof s, f);",
+    "    printf(\"C가 읽음: %s\", s);",
+    "    return 0;",
+    "}",
+  ].join("\n"));
+  await page.click("#btn-run");
+  await waitIdle(page);
+  assert.match(await consoleText(page), /C가 읽음: 파이썬에서 왔어요/);
+
+  await page.locator("#file-import").setInputFiles({
+    name: "hello.cpp", mimeType: "text/x-c++src",
+    buffer: Buffer.from("#include <cstdio>\nstruct P { int x; };\nint main() { P p = {7}; bool ok = true; printf(\"C++ %d %d\\n\", p.x, ok); }\n"),
+  });
+  await page.waitForFunction(() => document.querySelector("#lang-badge").textContent === "C++");
+  await page.click("#btn-run");
+  await waitIdle(page);
+  assert.match(await consoleText(page), /C\+\+ 7 1/);
+  assert.deepEqual(errors, []);
+  await context.close();
+});

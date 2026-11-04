@@ -716,3 +716,116 @@ test("바이트 단위로 다른 타입 포인터 읽기는 안내해요", () =>
   const e = error("#include <stdio.h>\nint main(void) { int x = 1; unsigned char *p = (unsigned char *)&x; return p[0]; }");
   assert.match(e.detail, /union/);
 });
+
+// ---------- 표준 문법·라이브러리 전수 검토 (C11 기준) ----------
+const AUDIT_H = "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <math.h>\n#include <ctype.h>\n";
+const AUDIT_M = (body, extra = "") => `${AUDIT_H}${extra}\nint main(void) {\n${body}\nreturn 0;\n}\n`;
+const AUDIT = [
+  ["문법", "16진 실수 리터럴", AUDIT_M('printf("%g", 0x1.8p3);'), "12"],
+  ["문법", "u8/L 문자열 접두사", AUDIT_M('printf("%s", u8"가");'), "가"],
+  ["문법", "_Static_assert", AUDIT_M('_Static_assert(sizeof(int) == 4, "int");printf("ok");'), "ok"],
+  ["문법", "_Alignof/_Alignas", AUDIT_M('printf("%d", (int)_Alignof(double));'), "8"],
+  ["문법", "_Generic", AUDIT_M('printf("%s", _Generic(1.0, double: "d", int: "i"));'), "d"],
+  ["문법", "_Noreturn 함수", AUDIT_M("die();", "_Noreturn void die(void) { exit(0); }"), ""],
+  ["문법", "배열 매개변수 static", AUDIT_M('int a[3]={1,2,3}; printf("%d", f(a));', "int f(int a[static 3]) { return a[2]; }"), "3"],
+  ["문법", "함수를 돌려주는 함수 포인터", AUDIT_M('printf("%d", pick(1)(2,3));', "int add(int a,int b){return a+b;}\nint (*pick(int k))(int, int) { return add; }"), "5"],
+  ["문법", "2차원 가변 길이 배열", AUDIT_M('int n=2,m=3; int a[n][m]; for(int i=0;i<n;i++)for(int j=0;j<m;j++)a[i][j]=i*m+j; printf("%d", a[1][2]);'), "5"],
+  ["문법", "VLA sizeof", AUDIT_M('int n=4; int a[n]; printf("%zu", sizeof(a));'), "16"],
+  ["문법", "쉼표 연산자·삼항 중첩", AUDIT_M('int a=(1,2,3); printf("%d %s", a, a>2?a>3?"x":"y":"z");'), "3 y"],
+  ["문법", "switch 안의 블록 case(더프)", AUDIT_M('int n=5,c=0; switch(n%2){case 1: do{c++;}while(--n>0);} printf("%d",c);'), "5"],
+  ["문법", "문자열 이어 붙이기·이스케이프", AUDIT_M('printf("a" "b\\t%c\\x41\\101\\n", 0x42);'), "ab\tBAA\n"],
+  ["문법", "char 배열 문자열 초기화 크기", AUDIT_M('char s[] = "abc"; printf("%zu", sizeof s);'), "4"],
+  ["문법", "extern 선언", AUDIT_M('printf("%d", g);', "extern int g;\nint g = 7;"), "7"],
+  ["문법", "static 함수·inline", AUDIT_M('printf("%d", sq(4));', "static inline int sq(int x) { return x * x; }"), "16"],
+  ["stdio", "sscanf", AUDIT_M('int a; char w[10]; sscanf("12 hi", "%d %s", &a, w); printf("%d %s", a, w);'), "12 hi"],
+  ["stdio", "perror", AUDIT_M('perror("err"); printf("x");'), "err: Success\nx"],
+  ["stdio", "fseek/ftell", AUDIT_M('FILE*f=fopen("a","w"); fputs("hello",f); fclose(f); f=fopen("a","r"); fseek(f,0,SEEK_END); printf("%ld", ftell(f)); fclose(f);'), "5"],
+  ["stdio", "fread/fwrite (글자)", AUDIT_M('FILE*f=fopen("b","w"); fwrite("abc",1,3,f); fclose(f); char buf[4]={0}; f=fopen("b","r"); fread(buf,1,3,f); fclose(f); printf("%s",buf);'), "abc"],
+  ["stdio", "ungetc", AUDIT_M('FILE*f=fopen("c","w"); fputs("xy",f); fclose(f); f=fopen("c","r"); int c=fgetc(f); ungetc(c,f); printf("%c", fgetc(f));'), "x"],
+  ["stdio", "puts/putchar/printf 반환값", AUDIT_M('int n = printf("abc"); printf("%d", n);'), "abc3"],
+  ["stdlib", "strtol/strtoul/strtod", AUDIT_M('char*e; long v=strtol("0x1f!",&e,16); double d=strtod("2.5e1x",&e); printf("%ld %.1f %c %lu", v, d, *e, strtoul("42",NULL,10));'), "31 25.0 x 42"],
+  ["stdlib", "atol/atoll", AUDIT_M('printf("%ld %lld", atol("123"), atoll("-9000000000"));'), "123 -9000000000"],
+  ["stdlib", "realloc", AUDIT_M('int*p=malloc(2*sizeof(int)); p[0]=1; p[1]=2; p=realloc(p,4*sizeof(int)); p[3]=4; printf("%d %d", p[1], p[3]); free(p);'), "2 4"],
+  ["stdlib", "div/ldiv", AUDIT_M('div_t r = div(7, 2); printf("%d %d", r.quot, r.rem);'), "3 1"],
+  ["stdlib", "abort/atexit", AUDIT_M('printf("a");', "void bye(void){printf(\"b\");}\n__attribute__((unused)) static int z;"), "a"],
+  ["stdlib", "getenv", AUDIT_M('printf("%s", getenv("HOME") ? "y" : "n");'), "n"],
+  ["string", "memcmp/memmove/memchr", AUDIT_M('char a[]="abcdef"; memmove(a+1,a,3); printf("%s %d %c", a, memcmp("ab","ac",2)<0, *(char*)memchr(a,\'e\',6));'), "aabcef 1 e"],
+  ["string", "strspn/strcspn/strpbrk", AUDIT_M('printf("%zu %zu %s", strspn("aab","a"), strcspn("abc","c"), strpbrk("hello","lo"));'), "2 2 llo"],
+  ["string", "strdup/strndup", AUDIT_M('char*s=strdup("hi"); printf("%s", s); free(s);'), "hi"],
+  ["string", "strcoll/strerror", AUDIT_M('printf("%d", strcmp("a","a"));'), "0"],
+  ["math", "isnan/isinf/INFINITY/NAN", AUDIT_M('printf("%d %d", isnan(NAN), isinf(INFINITY));'), "1 1"],
+  ["math", "modf/ldexp/frexp/exp2/log1p", AUDIT_M('double ip; double fp = modf(3.25,&ip); int e; frexp(8.0,&e); printf("%.2f %.0f %.0f %d %.0f", fp, ip, ldexp(1,3), e, exp2(4));'), "0.25 3 8 4 16"],
+  ["math", "lround/fmin/copysign/round", AUDIT_M('printf("%ld %.1f %.1f", lround(2.5), fmin(1,2), copysign(3,-1));'), "3 1.0 -3.0"],
+  ["ctype", "isprint/iscntrl/isgraph", AUDIT_M('printf("%d %d %d", !!isprint(\'a\'), !!iscntrl(\'\\n\'), !!isgraph(\' \'));'), "1 1 0"],
+  ["헤더", "stdint.h (int32_t, uint8_t)", AUDIT_M('int32_t a = -5; uint8_t b = 300; int64_t c = 1LL<<40; printf("%d %d %lld", a, b, (long long)c);', "#include <stdint.h>"), "-5 44 1099511627776"],
+  ["헤더", "inttypes.h (PRId64)", AUDIT_M('int64_t x = 42; printf("%" PRId64, x);', "#include <inttypes.h>"), "42"],
+  ["헤더", "assert.h", AUDIT_M('assert(1 + 1 == 2); printf("ok");', "#include <assert.h>"), "ok"],
+  ["헤더", "float.h", AUDIT_M('printf("%d %g", FLT_DIG, DBL_EPSILON);', "#include <float.h>"), "6 2.22045e-16"],
+  ["헤더", "limits.h", AUDIT_M('printf("%d %u %lld", INT_MAX, UINT_MAX, LLONG_MIN);', "#include <limits.h>"), "2147483647 4294967295 -9223372036854775808"],
+  ["헤더", "errno.h", AUDIT_M('errno = 0; printf("%d", errno);', "#include <errno.h>"), "0"],
+  ["헤더", "time.h struct tm", AUDIT_M('time_t t = 0; struct tm *g = gmtime(&t); printf("%d", g->tm_year + 1900);', "#include <time.h>"), "1970"],
+  ["헤더", "setjmp.h", AUDIT_M('jmp_buf b; if (setjmp(b) == 0) longjmp(b, 1); printf("back");', "#include <setjmp.h>"), "back"],
+  ["헤더", "stdbool.h", AUDIT_M('bool b = true; printf("%d", b);', "#include <stdbool.h>"), "1"],
+  ["헤더", "stddef.h offsetof", AUDIT_M('printf("%zu", offsetof(struct P, y));', "#include <stddef.h>\nstruct P { char c; int y; };"), "4"],
+];
+for (const [group, name, code, want] of AUDIT) {
+  test(`표준 검토 [${group}] ${name}`, () => {
+    const r = run(code);
+    assert.ok(r.status === "ok" || r.status === "exit", JSON.stringify(r.error));
+    assert.equal(r.out, want);
+  });
+}
+
+const MORE_M = (body, pre = "") => `#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <math.h>\n${pre}\nint main(void) {\n${body}\nreturn 0;\n}\n`;
+const MORE = [
+  ["VLA 매개변수 2차원", MORE_M('int a[2][3]={{1,2,3},{4,5,6}}; printf("%d", sum(2,3,a));', "int sum(int n, int m, int a[n][m]) { int s=0; for(int i=0;i<n;i++) for(int j=0;j<m;j++) s+=a[i][j]; return s; }"), "21"],
+  ["VLA 매개변수 1차원", MORE_M('int a[3]={1,2,3}; printf("%d", sum(3,a));', "int sum(int n, int a[n]) { int s=0; for(int i=0;i<n;i++) s+=a[i]; return s; }"), "6"],
+  ["VLA 재귀", MORE_M('printf("%d", f(4));', "int f(int n) { int a[n]; for(int i=0;i<n;i++) a[i]=i; if(n==1) return a[0]; int r=f(n-1); return a[n-1]+r; }"), "6"],
+  ["VLA 2차원 sizeof", MORE_M('int n=3,m=5; double a[n][m]; printf("%zu %zu", sizeof a, sizeof a[0]);'), "120 40"],
+  ["VLA 범위 초과", MORE_M('int n=3; int a[n]; a[3]=1;'), "ERR"],
+  ["VLA 포인터", MORE_M('int n=2,m=3; int a[n][m]; int (*p)[m] = a; p[1][2]=9; printf("%d", a[1][2]);'), "9"],
+  ["setjmp 함수 밖으로", MORE_M('if (setjmp(env)) { printf("caught %d", code); return 0; } work(); printf("no");', "#include <setjmp.h>\njmp_buf env; int code;\nvoid work(void) { code = 42; longjmp(env, 2); }"), "caught 42"],
+  ["setjmp 반복", MORE_M('volatile int n = 0; int r = setjmp(env); n++; if (r < 3) longjmp(env, r + 1); printf("%d %d", r, n);', "#include <setjmp.h>\njmp_buf env;"), "3 4"],
+  ["extern 지역", MORE_M('extern int g; printf("%d", g);', "int g = 5;"), "5"],
+  ["extern 정의 없음", MORE_M('printf("%d", g);', "extern int g;"), "ERR"],
+  ["_Generic 매크로", MORE_M('printf("%s %s %s", T(1), T(2.0), T("s"));', '#define T(x) _Generic((x), int: "int", double: "double", char *: "str", default: "?")'), "int double str"],
+  ["_Static_assert 실패", MORE_M('', '_Static_assert(sizeof(int) == 8, "int는 8바이트");'), "ERR"],
+  ["errno fopen", MORE_M('FILE *f = fopen("none.txt", "r"); if (!f) printf("%d %s", errno == ENOENT, strerror(errno));', "#include <errno.h>"), "1 No such file or directory"],
+  ["strftime", MORE_M('time_t t = 86400 * 365; struct tm *g = gmtime(&t); char b[64]; strftime(b, sizeof b, "%Y-%m-%d %H:%M %a %b", g); printf("%s", b);', "#include <time.h>"), "1971-01-01 00:00 Fri Jan"],
+  ["mktime", MORE_M('struct tm t = {0}; t.tm_year = 100; t.tm_mon = 0; t.tm_mday = 32; mktime(&t); printf("%d %d", t.tm_mon, t.tm_mday);', "#include <time.h>"), "1 1"],
+  ["atexit 순서", MORE_M('atexit(a); atexit(b); printf("main ");', 'void a(void){printf("a");}\nvoid b(void){printf("b");}'), "main ba"],
+  ["atexit + exit", MORE_M('atexit(a); exit(3);', 'void a(void){printf("a");}'), "a"],
+  ["fwrite/fread int 배열", MORE_M('int a[3]={1,-2,300}, b[3]; FILE*f=fopen("d.bin","wb"); fwrite(a,sizeof(int),3,f); fclose(f); f=fopen("d.bin","rb"); size_t n=fread(b,sizeof(int),3,f); fclose(f); printf("%zu %d %d %d", n, b[0], b[1], b[2]);'), "3 1 -2 300"],
+  ["fwrite 구조체", MORE_M('struct P p={1,2.5}, q; FILE*f=fopen("e","wb"); fwrite(&p,sizeof p,1,f); fclose(f); f=fopen("e","rb"); fread(&q,sizeof q,1,f); printf("%d %.1f", q.x, q.y);', "struct P { int x; double y; };"), "1 2.5"],
+  ["memcmp int", MORE_M('int a[2]={1,2}, b[2]={1,3}; printf("%d", memcmp(a,b,sizeof a) < 0);'), "1"],
+  ["memmove 겹침 int", MORE_M('int a[5]={1,2,3,4,5}; memmove(a+1,a,4*sizeof(int)); printf("%d%d%d%d%d", a[0],a[1],a[2],a[3],a[4]);'), "11234"],
+  ["realloc 늘리고 줄이기", MORE_M('int *p=NULL; for(int i=0;i<5;i++){ p=realloc(p,(i+1)*sizeof(int)); p[i]=i*i; } printf("%d", p[4]); free(p);'), "16"],
+  ["strtol endptr 반복", MORE_M('const char *s="10 20 30"; char *e; long t=0; for(;;){ long v=strtol(s,&e,10); if(e==s) break; t+=v; s=e; } printf("%ld", t);'), "60"],
+  ["sscanf 반환값", MORE_M('int a,b; int n = sscanf("5 x", "%d %d", &a, &b); printf("%d", n);'), "1"],
+  ["div 음수", MORE_M('ldiv_t r = ldiv(-7L, 2L); printf("%ld %ld", r.quot, r.rem);'), "-3 -1"],
+  ["assert 실패", MORE_M('int x = 3; assert(x == 4);', "#include <assert.h>"), "ERR"],
+  ["offsetof 중첩", MORE_M('printf("%zu", offsetof(struct Q, p.y));', "#include <stddef.h>\nstruct P { char c; double y; };\nstruct Q { int a; struct P p; };"), "16"],
+  ["_Alignof struct", MORE_M('printf("%zu", _Alignof(struct P));', "struct P { char c; double y; };"), "8"],
+  ["uint8_t 오버플로", MORE_M('uint8_t x = 255; x++; int16_t y = 32767; y++; printf("%u %d", x, y);', "#include <stdint.h>"), "0 -32768"],
+  ["PRIu64", MORE_M('uint64_t x = 18446744073709551615ULL; printf("%" PRIu64, x);', "#include <inttypes.h>"), "18446744073709551615"],
+  ["hypot/cbrt/trunc", MORE_M('printf("%.0f %.0f %.0f", hypot(3,4), cbrt(27), trunc(-2.7));'), "5 3 -2"],
+  ["rand 범위", MORE_M('srand(1); int ok=1; for(int i=0;i<100;i++){int r=rand()%6+1; if(r<1||r>6) ok=0;} printf("%d", ok);'), "1"],
+  ["getline 대신 fgets", MORE_M('char b[10]; FILE*f=fopen("g","w"); fputs("ab\\ncd\\n",f); fclose(f); f=fopen("g","r"); int n=0; while(fgets(b,sizeof b,f)) n++; printf("%d", n);'), "2"],
+];
+for (const [name, code, want] of MORE) {
+  test(`표준 검토 (더) ${name}`, () => {
+    const r = run(code);
+    if (want === "ERR") {
+      assert.equal(r.status, "error");
+    } else {
+      assert.ok(r.status === "ok" || r.status === "exit", JSON.stringify(r.error));
+      assert.equal(r.out, want);
+    }
+  });
+}
+
+test("지원하지 않는 것은 친절하게 알려요: K&R 정의, complex.h, wchar.h", () => {
+  assert.match(error("int old(x) int x; { return x; }\nint main(void) { return old(1); }").title, /K&R/);
+  assert.match(error("#include <complex.h>\nint main(void) { return 0; }").title, /complex\.h/);
+  assert.match(error("#include <wchar.h>\nint main(void) { return 0; }").title, /wchar\.h/);
+});

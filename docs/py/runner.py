@@ -16,10 +16,14 @@ input()을 처리하는 방법은 두 가지예요.
 
 import builtins
 import inspect
+import io
 import json
+import os
 import random
 import re
+import shutil
 import sys
+import tempfile
 import time
 import traceback
 import types
@@ -131,7 +135,132 @@ def _variables(namespace):
     return result
 
 
-def run(code, answers_json, seed, mode, bridge):
+# ---------- asyncio: 브라우저 파이썬에서도 asyncio.run()이 되게 ----------
+_ASYNC_READY = False
+
+
+def _install_asyncio():
+    """Pyodide의 기본 이벤트 루프는 동기 코드 안에서 기다릴 수 없어요.
+    그래서 asyncio.run()과 새 이벤트 루프가 '그냥 차례대로 도는' 루프를 쓰게 바꿔요."""
+    global _ASYNC_READY
+    if _ASYNC_READY:
+        return
+    import asyncio
+
+    class _NoSelector:
+        def select(self, timeout=None):
+            if timeout and timeout > 0:
+                time.sleep(timeout)
+            return []
+
+        def close(self):
+            pass
+
+        def get_map(self):
+            return {}
+
+    class _SyncLoop(asyncio.BaseEventLoop):
+        def __init__(self):
+            super().__init__()
+            self._selector = _NoSelector()
+
+        def _process_events(self, event_list):
+            pass
+
+        def _write_to_self(self):
+            pass
+
+    def run_sync(main, *, debug=None, loop_factory=None):
+        loop = (loop_factory or _SyncLoop)()
+        if debug is not None:
+            loop.set_debug(debug)
+        # Pyodide는 자기 루프가 항상 '돌고 있다'고 표시해 둬서, 잠깐 표시를 치워요
+        outer = asyncio.events._get_running_loop()
+        asyncio.events._set_running_loop(None)
+        try:
+            asyncio.set_event_loop(loop)
+            return loop.run_until_complete(main)
+        finally:
+            try:
+                tasks = [t for t in asyncio.all_tasks(loop) if not t.done()]
+                for t in tasks:
+                    t.cancel()
+                if tasks:
+                    loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            finally:
+                asyncio.set_event_loop(None)
+                loop.close()
+                asyncio.events._set_running_loop(outer)
+
+    asyncio.run = run_sync
+    asyncio.new_event_loop = _SyncLoop
+    _ASYNC_READY = True
+
+
+# ---------- 파일: C와 함께 쓰는 가상 파일들 ----------
+WORK_DIR = os.path.join(tempfile.gettempdir(), "pybridge_work")
+
+
+def _prepare_files(files):
+    """실행할 때마다 작업 폴더를 저장된 파일들로 새로 채워요 (다시 실행해도 두 번 써지지 않게)."""
+    shutil.rmtree(WORK_DIR, ignore_errors=True)
+    os.makedirs(WORK_DIR, exist_ok=True)
+    for name, text in files.items():
+        path = os.path.join(WORK_DIR, name)
+        os.makedirs(os.path.dirname(path) or WORK_DIR, exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+
+
+def _collect_files():
+    found = {}
+    for root, _dirs, names in os.walk(WORK_DIR):
+        for name in names:
+            path = os.path.join(root, name)
+            rel = os.path.relpath(path, WORK_DIR).replace(os.sep, "/")
+            if rel == FILENAME:
+                continue
+            with open(path, "rb") as f:
+                found[rel] = f.read().decode("utf-8", errors="replace")
+    return found
+
+
+class _Stdin(io.TextIOBase):
+    """sys.stdin.readline() 같은 읽기도 input()과 같은 말풍선으로 받아요."""
+
+    def __init__(self, ask):
+        self._ask = ask
+
+    def readable(self):
+        return True
+
+    def readline(self, size=-1):
+        value = self._ask("")
+        return "" if value is None else value + "\n"
+
+    def read(self, size=-1):
+        lines = []
+        while True:
+            line = self.readline()
+            if not line:
+                return "".join(lines)
+            lines.append(line)
+
+    def readlines(self, hint=-1):
+        return self.read().splitlines(keepends=True)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        line = self.readline()
+        if not line:
+            raise StopIteration
+        return line
+
+
+def run(code, answers_json, seed, mode, bridge, files_json="{}"):
     """사용자 코드를 실행하고 결과를 JSON 문자열로 돌려줍니다.
 
     status: "ok" 정상 종료 / "exit" sys.exit() / "error" 오류 /
@@ -143,7 +272,8 @@ def run(code, answers_json, seed, mode, bridge):
     # replay 방식에서 이미 받은 답이 있으면, 그 답을 다 쓸 때까지는 이미 본 출력이에요.
     out.muted = err.muted = bool(answers) and mode == "replay"
 
-    def patched_input(prompt=""):
+    def ask(prompt):
+        """답 하나를 받아요. 입력 끝(EOF)이면 None."""
         out.flush()
         err.flush()
         prompt = str(prompt)
@@ -152,21 +282,30 @@ def run(code, answers_json, seed, mode, bridge):
                 value = answers.pop(0)
                 if not answers:
                     out.muted = err.muted = False
-                if value is None:  # 화면에서 "입력 끝(EOF)"을 보냈어요
-                    raise EOFError("EOF when reading a line")
                 return value
             bridge.post_input_request(prompt)
             out.muted = err.muted = True
             raise _NeedInput()
-        return str(bridge.wait_for_input(prompt))
+        value = bridge.wait_for_input(prompt)
+        return None if value is None else str(value)
 
-    saved = (sys.stdout, sys.stderr, builtins.input, sys.argv)
+    def patched_input(prompt=""):
+        value = ask(prompt)
+        if value is None:  # 화면에서 "입력 끝(EOF)"을 보냈어요
+            raise EOFError("EOF when reading a line")
+        return value
+
+    if "asyncio" in code:
+        _install_asyncio()
+    saved = (sys.stdout, sys.stderr, sys.stdin, builtins.input, sys.argv, os.getcwd())
+    _prepare_files(json.loads(files_json))
     modules_before = set(sys.modules)
     namespace = {"__name__": "__main__", "__file__": FILENAME, "__builtins__": builtins}
     status, error, exit_code = "ok", None, 0
     started = time.perf_counter()
 
-    sys.stdout, sys.stderr, builtins.input, sys.argv = out, err, patched_input, [FILENAME]
+    sys.stdout, sys.stderr, sys.stdin, builtins.input, sys.argv = out, err, _Stdin(ask), patched_input, [FILENAME]
+    os.chdir(WORK_DIR)
     random.seed(seed)
     try:
         exec(compile(code, FILENAME, "exec"), namespace)
@@ -188,7 +327,8 @@ def run(code, answers_json, seed, mode, bridge):
     finally:
         out.flush()
         err.flush()
-        sys.stdout, sys.stderr, builtins.input, sys.argv = saved
+        sys.stdout, sys.stderr, sys.stdin, builtins.input, sys.argv = saved[:5]
+        os.chdir(saved[5])
         # 사용자 코드가 불러온 모듈은 지워서, 다음 실행이 깨끗하게 시작하게 해요.
         for name in set(sys.modules) - modules_before:
             sys.modules.pop(name, None)
@@ -199,4 +339,5 @@ def run(code, answers_json, seed, mode, bridge):
         "exitCode": exit_code,
         "seconds": round(time.perf_counter() - started, 3),
         "variables": [] if status == "waiting" else _variables(namespace),
+        "files": None if status == "waiting" else _collect_files(),
     }, ensure_ascii=False)

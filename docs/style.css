@@ -151,7 +151,8 @@ svg { width: 20px; height: 20px; flex: none; }
   font-family: var(--font-code); font-size: 12px; font-weight: 700;
   background: var(--accent); color: var(--surface);
 }
-.file-name .lang-badge[data-lang="c"] { background: var(--tok-definition); }
+.file-name .lang-badge[data-lang="c"],
+.file-name .lang-badge[data-lang="cpp"] { background: var(--tok-definition); }
 .file-name svg { width: 16px; height: 16px; fill: none; stroke: var(--muted); stroke-width: 2; }
 .file-name:hover { border-color: var(--line); }
 .save-state { color: var(--muted); font-size: 13px; white-space: nowrap; }
