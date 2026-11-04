@@ -21,7 +21,7 @@ function intType(name, bits, unsigned, rank, size) {
 
 export const T = {
   void: { k: "void", name: "void", size: 1 },
-  bool: intType("bool", 1, true, 0, 1),
+  bool: { ...intType("bool", 1, true, 0, 1), isBool: true },
   char: intType("char", 8, false, 1, 1),
   schar: intType("signed char", 8, false, 1, 1),
   uchar: intType("unsigned char", 8, true, 1, 1),
@@ -73,7 +73,12 @@ export function alignOf(t) {
 /** 이 타입의 모든 칸을 0으로 채운 값 목록 (구조체는 칸마다 0의 종류가 달라요). */
 export function zerosOf(t) {
   if (isStruct(t)) {
-    if (!t.zeros) t.zeros = t.fields.flatMap((f) => (t.isUnion && f !== t.fields[0] ? [] : zerosOf(f.type)));
+    if (!t.zeros) {
+      if (t.isUnion) {
+        const first = zerosOf(t.fields[0].type);
+        t.zeros = Array.from({ length: t.cellCount }, (_, i) => (i < first.length ? first[i] : 0));
+      } else t.zeros = t.fields.flatMap((f) => zerosOf(f.type));
+    }
     return t.zeros;
   }
   if (isArr(t)) {
@@ -94,12 +99,12 @@ export function sameType(a, b) {
   if (a === b) return true;
   if (a.k !== b.k) return false;
   if (a.k === "struct") return false;
-  if (a.k === "file") return true;
+  if (a.k === "file" || a.k === "valist") return true;
   if (a.k === "func") {
     return sameType(a.ret, b.ret) && a.params.length === b.params.length &&
       a.params.every((p, i) => sameType(p.type, b.params[i].type));
   }
-  if (a.k === "int" || a.k === "float") return a.name === b.name;
+  if (a.k === "int" || a.k === "float") return a.name === b.name && a.bits === b.bits;
   if (a.k === "ptr") return sameType(a.to, b.to);
   if (a.k === "array") return a.len === b.len && sameType(a.of, b.of);
   return a.k === "void";
@@ -108,6 +113,7 @@ export function sameType(a, b) {
 export function typeName(t) {
   switch (t.k) {
     case "ptr":
+      if (t.toConst && !isArr(t.to) && !isFunc(t.to)) return `const ${typeName(t.to)} *`;
       if (isArr(t.to)) return `${typeName(baseOf(t.to))} (*)[${t.to.len}]`;
       if (isFunc(t.to)) return `${typeName(t.to.ret)} (*)(${t.to.params.map((p) => typeName(p.type)).join(", ")})`;
       return `${typeName(t.to)} *`;
@@ -161,7 +167,7 @@ export function common(a, b) {
 /** 값을 다른 타입으로 바꿔요 (C의 형 변환 규칙). */
 export function convert(v, from, to) {
   if (to.k === "int") {
-    if (to.bits === 1) {
+    if (to.isBool) {
       if (from.k === "ptr") return v === null ? 0 : 1;
       return v == 0 ? 0 : 1; // eslint-disable-line eqeqeq
     }
@@ -184,7 +190,12 @@ export function convert(v, from, to) {
     switch (to.bits) {
       case 32: return to.unsigned ? n >>> 0 : n | 0;
       case 16: return to.unsigned ? n & 0xffff : (n << 16) >> 16;
-      default: return to.unsigned ? n & 0xff : (n << 24) >> 24;
+      case 8: return to.unsigned ? n & 0xff : (n << 24) >> 24;
+      default: {
+        // 비트 필드: 정해진 비트 수만 남겨요
+        const sh = 32 - to.bits;
+        return to.unsigned ? (n << sh) >>> sh : (n << sh) >> sh;
+      }
     }
   }
   if (to.k === "float") {
@@ -228,10 +239,29 @@ export class FnRef {
 
 /** 메모리 위치를 가리키는 값 (C의 포인터). off는 칸 번호예요. */
 export class Ptr {
-  constructor(store, off) {
+  constructor(store, off, as) {
     this.store = store;
     this.off = off;
+    if (as) this.as = as; // 공용체 멤버로 접근할 때: 이 타입으로 읽고 써요
   }
+}
+
+/** 공용체: 다른 멤버로 쓴 값을 이 타입으로 다시 읽어요 (비트 그대로, 리틀 엔디언). */
+export function reinterpret(v, from, to) {
+  if (from.k === "ptr" || to.k === "ptr") return null;
+  const view = new DataView(new ArrayBuffer(8));
+  const put = { 8: "setUint8", 16: "setUint16", 32: "setUint32", 64: "setBigUint64" };
+  if (from.k === "float") {
+    if (from.bits === 32) view.setFloat32(0, v, true);
+    else view.setFloat64(0, v, true);
+  } else {
+    const bits = from.bits <= 8 ? 8 : from.bits <= 16 ? 16 : from.bits <= 32 ? 32 : 64;
+    if (bits === 64) view.setBigUint64(0, BigInt.asUintN(64, BigInt(v)), true);
+    else view[put[bits]](0, Number(BigInt.asUintN(bits, BigInt(v))), true);
+  }
+  if (to.k === "float") return to.bits === 32 ? view.getFloat32(0, true) : view.getFloat64(0, true);
+  if (to.bits === 64) return to.unsigned ? view.getBigUint64(0, true) : view.getBigInt64(0, true);
+  return convert(view.getUint32(0, true), { k: "int", bits: 32, unsigned: true }, to);
 }
 
 // ---------- UTF-8 ----------

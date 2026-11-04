@@ -3,7 +3,7 @@
 import { compileError, T, utf8 } from "./types.js";
 
 export const HEADERS = new Set([
-  "stdio.h", "stdlib.h", "string.h", "math.h", "ctype.h", "stdbool.h", "time.h", "limits.h", "stddef.h",
+  "stdio.h", "stdlib.h", "string.h", "math.h", "ctype.h", "stdbool.h", "time.h", "limits.h", "stddef.h", "stdarg.h",
 ]);
 
 const PUNCTUATORS = [
@@ -76,19 +76,20 @@ function numberToken(text, line, col) {
 }
 
 /** 소스 코드를 토큰 목록으로 바꿔요 (전처리 전). */
-function rawTokens(src) {
+function rawTokens(src, inMacro = false) {
   const tokens = [];
   const directives = [];
   let i = 0;
   let line = 1;
   let lineStart = 0;
   let atLineStart = true;
+  let space = true;
   const n = src.length;
 
   while (i < n) {
     const c = src[i];
-    if (c === "\n") { line++; i++; lineStart = i; atLineStart = true; continue; }
-    if (c === " " || c === "\t" || c === "\r" || c === "\f" || c === "\v") { i++; continue; }
+    if (c === "\n") { line++; i++; lineStart = i; atLineStart = true; space = true; continue; }
+    if (c === " " || c === "\t" || c === "\r" || c === "\f" || c === "\v") { i++; space = true; continue; }
     if (c === "/" && src[i + 1] === "/") {
       while (i < n && src[i] !== "\n") i++;
       continue;
@@ -100,7 +101,7 @@ function rawTokens(src) {
       i = end + 2;
       continue;
     }
-    if (c === "#" && atLineStart) {
+    if (c === "#" && atLineStart && !inMacro) {
       let end = src.indexOf("\n", i);
       if (end < 0) end = n;
       directives.push({ text: src.slice(i + 1, end).replace(/\/\/.*$/, "").trim(), line, at: tokens.length });
@@ -109,11 +110,13 @@ function rawTokens(src) {
     }
     atLineStart = false;
     const col = i - lineStart + 1;
+    const ws = space; // 앞에 빈칸이 있었는지 (매크로 #으로 글자를 만들 때 필요해요)
+    space = false;
 
     if (IDENT_START.test(c)) {
       let j = i + 1;
       while (j < n && IDENT_CHAR.test(src[j])) j++;
-      tokens.push({ k: "id", v: src.slice(i, j), line, col });
+      tokens.push({ k: "id", v: src.slice(i, j), line, col, raw: src.slice(i, j), ws });
       i = j;
       continue;
     }
@@ -124,7 +127,7 @@ function rawTokens(src) {
         while (j < n && IDENT_CHAR.test(src[j])) j++;
         throw compileError(line, `'${src.slice(i, j)}'는 올바른 숫자나 이름이 아니에요`, "변수 이름은 숫자로 시작할 수 없어요.");
       }
-      tokens.push(numberToken(m[0], line, col));
+      tokens.push({ ...numberToken(m[0], line, col), raw: m[0], ws });
       i = j;
       continue;
     }
@@ -146,7 +149,7 @@ function rawTokens(src) {
           j += s.length;
         }
       }
-      tokens.push({ k: "str", bytes, line, col });
+      tokens.push({ k: "str", bytes, line, col, raw: src.slice(i, j + 1), ws });
       i = j + 1;
       continue;
     }
@@ -174,13 +177,13 @@ function rawTokens(src) {
         }
         throw compileError(line, "작은따옴표(')로 시작한 글자가 닫히지 않았어요");
       }
-      tokens.push({ k: "num", type: T.int, value: value > 127 ? value - 256 : value, text: src.slice(i, j + 1), line, col, isChar: true });
+      tokens.push({ k: "num", type: T.int, value: value > 127 ? value - 256 : value, text: src.slice(i, j + 1), line, col, isChar: true, raw: src.slice(i, j + 1), ws });
       i = j + 1;
       continue;
     }
     const p = PUNCTUATORS.find((op) => src.startsWith(op, i));
     if (p) {
-      tokens.push({ k: "op", v: p, line, col });
+      tokens.push({ k: "op", v: p, line, col, raw: p, ws });
       i += p.length;
       continue;
     }
@@ -193,13 +196,41 @@ function parseDefine(text, line) {
   const m = text.match(/^define\s+([A-Za-z_]\w*)(\(([^)]*)\))?\s*(.*)$/);
   if (!m) throw compileError(line, "#define 문장이 올바르지 않아요", "예: #define MAX 100");
   const [, name, , paramText, body] = m;
-  const { tokens } = rawTokens(body);
+  const { tokens } = rawTokens(body, true);
   for (const t of tokens) t.line = line;
-  if (tokens.some((t) => t.v === "#" || t.v === "##")) {
-    throw compileError(line, "#define 안의 # 와 ## 는 아직 지원하지 않아요");
+  let params = paramText === undefined ? null : paramText.split(",").map((s) => s.trim()).filter(Boolean);
+  let variadic = false;
+  if (params && params[params.length - 1] === "...") {
+    variadic = true;
+    params = params.slice(0, -1);
   }
-  const params = paramText === undefined ? null : paramText.split(",").map((s) => s.trim()).filter(Boolean);
-  return { name, params, body: tokens };
+  const isParam = (t) => t && t.k === "id" && params && (params.includes(t.v) || (variadic && t.v === "__VA_ARGS__"));
+  tokens.forEach((t, i) => {
+    if (t.v === "#" && t.k === "op" && params && !isParam(tokens[i + 1])) {
+      throw compileError(line, "매크로의 # 뒤에는 매개변수 이름이 와야 해요", "예: #define SHOW(x) printf(#x \" = %d\\n\", x)");
+    }
+    if (t.v === "##" && (i === 0 || i === tokens.length - 1)) throw compileError(line, "## 는 매크로 내용의 처음이나 끝에 올 수 없어요");
+  });
+  return { name, params, variadic, body: tokens };
+}
+
+/** 매크로 #x: 값으로 받은 토큰들을 그대로 문자열로 만들어요 */
+function stringify(tokens, line) {
+  const text = tokens.map((t, i) => {
+    // 글자 그대로 담아요 (문자열 안의 따옴표도 그대로 보여요)
+    const raw = t.raw ?? t.v ?? t.text ?? "";
+    return (i > 0 && t.ws ? " " : "") + raw;
+  }).join("");
+  return { k: "str", bytes: utf8(text), line, raw: JSON.stringify(text), ws: true };
+}
+
+/** 매크로 a ## b: 두 토큰을 이어 붙여 새 토큰 하나를 만들어요 */
+function paste(a, b, line) {
+  const text = (a ? a.raw ?? "" : "") + (b ? b.raw ?? "" : "");
+  if (!text) return [];
+  const { tokens } = rawTokens(text, true);
+  if (tokens.length !== 1) throw compileError(line, `## 로 '${text}'를 만들었는데 올바른 낱말 하나가 아니에요`);
+  return [{ ...tokens[0], line, ws: a ? a.ws : false }];
 }
 
 /** #if 의 조건(정수 식)을 계산해요. defined(이름), 매크로, 숫자, 계산 기호를 쓸 수 있어요. */
@@ -357,7 +388,9 @@ export function tokenize(src) {
     const tok = list[i];
     const macro = tok.k === "id" && !hidden.has(tok.v) ? macros.get(tok.v) : null;
     if (!macro) {
-      outList.push(tok);
+      if (tok.k === "id" && tok.v === "__LINE__") outList.push({ k: "num", type: T.int, value: tok.line, text: String(tok.line), raw: String(tok.line), line: tok.line, col: tok.col });
+      else if (tok.k === "id" && tok.v === "__FILE__") outList.push({ k: "str", bytes: utf8("main.c"), raw: '"main.c"', line: tok.line, col: tok.col });
+      else outList.push(tok);
       return i + 1;
     }
     if (macro.header && !includes.has(macro.header)) {
@@ -383,15 +416,50 @@ export function tokenize(src) {
         else args[args.length - 1].push(t);
       }
       if (j >= list.length) throw compileError(tok.line, `매크로 ${tok.v}의 괄호가 닫히지 않았어요`);
-      const given = args.length === 1 && args[0].length === 0 ? [] : args;
-      if (given.length !== macro.params.length) {
-        throw compileError(tok.line, `매크로 ${tok.v}에는 값 ${macro.params.length}개가 필요한데 ${given.length}개를 넣었어요`);
+      let given = args.length === 1 && args[0].length === 0 ? [] : args;
+      const named = macro.params.length;
+      if (macro.variadic) {
+        if (given.length < named) {
+          throw compileError(tok.line, `매크로 ${tok.v}에는 값이 적어도 ${named}개 필요한데 ${given.length}개를 넣었어요`);
+        }
+        const rest = given.slice(named);
+        const va = [];
+        rest.forEach((a, k) => { if (k) va.push({ k: "op", v: ",", raw: ",", line: tok.line }); va.push(...a); });
+        given = [...given.slice(0, named), va];
+      } else if (given.length !== named) {
+        throw compileError(tok.line, `매크로 ${tok.v}에는 값 ${named}개가 필요한데 ${given.length}개를 넣었어요`);
       }
+      const argOf = (t) => {
+        if (!t || t.k !== "id") return null;
+        if (macro.variadic && t.v === "__VA_ARGS__") return given[named];
+        const p = macro.params.indexOf(t.v);
+        return p >= 0 ? given[p] : null;
+      };
+      // 1) #x 는 문자열로, x 는 받은 값으로 바꿔요. ## 옆의 값은 붙일 수 있게 표시해 둬요.
+      const parts = [];
+      const src = macro.body;
+      for (let k = 0; k < src.length; k++) {
+        const t = src[k];
+        if (t.k === "op" && t.v === "#" && argOf(src[k + 1])) {
+          parts.push([stringify(argOf(src[k + 1]), tok.line)]);
+          k++;
+        } else if (t.k === "op" && t.v === "##") {
+          parts.push("##");
+        } else {
+          const a = argOf(t);
+          parts.push(a ? a.map((x, n) => (n === 0 ? { ...x, ws: t.ws } : x)) : [t]);
+        }
+      }
+      // 2) a ## b 를 이어 붙여요. 빈 __VA_ARGS__ 앞의 , ## 는 쉼표를 지워요 (GNU 방식).
       body = [];
-      for (const t of macro.body) {
-        const p = t.k === "id" ? macro.params.indexOf(t.v) : -1;
-        if (p >= 0) body.push(...given[p]);
-        else body.push(t);
+      for (let k = 0; k < parts.length; k++) {
+        if (parts[k] !== "##") { body.push(...parts[k]); continue; }
+        const right = parts[k + 1] || [];
+        k++;
+        const left = body.pop();
+        if (left && left.v === "," && right.length === 0) continue;
+        if (left && left.v === "," ) { body.push(left, ...right); continue; }
+        body.push(...paste(left, right[0], tok.line), ...right.slice(1));
       }
       i = j + 1;
     } else {

@@ -561,7 +561,6 @@ test("구조체·포인터·파일 실수 안내", () => {
   assert.match(error(`${S}int main(void) { struct P a; printf("%d", a.x); return 0; }`).title, /값을 넣지 않은 'a\.x'/);
   assert.match(error("struct Q;\nint main(void) { struct Q q; return 0; }").title, /내용이 아직 정의되지 않았어요/);
   assert.match(error("int main(void) { int (*f)(int) = 0; return f(1); }").title, /아무 함수도 가리키지 않아요/);
-  assert.match(error("union U { int a; };\nint main(void) { return 0; }").title, /union/);
   assert.match(error("#include <stdio.h>\nint main(void) { FILE *fp = fopen(\"x.txt\", \"r\"); fgetc(fp); return 0; }").title, /NULL 파일 포인터/);
   assert.match(error("#include <stdio.h>\nint main(void) { FILE *fp = fopen(\"x.txt\", \"w\"); fclose(fp); fputs(\"a\", fp); return 0; }").title, /닫은 파일/);
   assert.match(error("#include <stdio.h>\n#ifdef X\nint main(void) { return 0; }\n").title, /#endif 로 닫히지/);
@@ -573,4 +572,147 @@ test("printf 실수 반올림은 진짜 C(glibc)와 똑같이", () => {
     printf("%.1f %.1f %.2f %.0f %.0f %.0f %.2f\\n", 2.25, 2.35, 1.005, 0.5, 1.5, 2.5, 0.125);
     printf("%.0e %g %g %#g %.17g %f\\n", 15000.0, 1234567.0, 0.0001, 1.0, 0.1, -0.0);`));
   assert.equal(r.out, "2.2 2.4 1.00 0 2 2 0.12\n2e+04 1.23457e+06 0.0001 1.00000 0.10000000000000001 -0.000000\n");
+});
+
+// ---------- goto, union, 비트 필드, 가변 인자, const, 복합 리터럴, 매크로 ----------
+test("goto와 이름표", () => {
+  const r = run(`#include <stdio.h>
+int main(void) {
+    int i, j;
+    for (i = 0; i < 5; i++)
+        for (j = 0; j < 5; j++)
+            if (i * j == 6) goto found;
+    printf("없음\\n");
+found:
+    printf("%d %d\\n", i, j);
+    int n = 0;
+again:
+    if (++n < 3) goto again;
+    printf("%d\\n", n);
+    return 0;
+}`);
+  assert.equal(r.out, "2 3\n3\n");
+  assert.match(error("#include <stdio.h>\nint main(void) { goto ennd; end: return 0; }").detail, /'end'/);
+  assert.match(error("#include <stdio.h>\nint main(void) { goto in; { in: ; } return 0; }").title, /안쪽/);
+});
+
+test("union: 같은 자리를 다른 타입으로 읽기", () => {
+  const r = run(`#include <stdio.h>
+union Bits { float f; unsigned int u; unsigned char b; };
+int main(void) {
+    union Bits x;
+    x.f = 1.0f;
+    printf("%x %d\\n", x.u, (int)sizeof(union Bits));
+    x.u = 0x41424344;
+    printf("%c\\n", x.b);
+    union Bits y = {.u = 7};
+    printf("%u\\n", y.u);
+    return 0;
+}`);
+  assert.equal(r.status, "ok", JSON.stringify(r.error));
+  assert.equal(r.out, "3f800000 4\nD\n7\n");
+  assert.match(r.variables.find((v) => v.name === "y").value, /u: 7.*공용체/);
+});
+
+test("비트 필드", () => {
+  const r = run(`#include <stdio.h>
+struct Flags { unsigned int on : 1; unsigned int mode : 3; int temp : 5; };
+int main(void) {
+    struct Flags f = {1, 5, -3};
+    f.mode += 6;
+    f.temp = 20;
+    f.on = 2;
+    printf("%u %u %d %d\\n", f.on, f.mode, f.temp, (int)sizeof(struct Flags));
+    return 0;
+}`);
+  assert.equal(r.out, "0 3 -12 4\n");
+  assert.match(error("struct S { unsigned a : 3; };\nint main(void) { struct S s; unsigned *p = &s.a; return 0; }").title, /비트 필드/);
+});
+
+test("가변 인자 함수 (stdarg.h)", () => {
+  const r = run(`#include <stdio.h>
+#include <stdarg.h>
+int sum(int count, ...) {
+    va_list args;
+    va_start(args, count);
+    int total = 0;
+    for (int i = 0; i < count; i++) total += va_arg(args, int);
+    va_end(args);
+    return total;
+}
+double avg(int n, ...) {
+    va_list ap;
+    va_start(ap, n);
+    double s = 0;
+    for (int i = 0; i < n; i++) s += va_arg(ap, double);
+    va_end(ap);
+    return s / n;
+}
+int main(void) {
+    printf("%d %d %.2f\\n", sum(3, 10, 20, 30), sum(2, 'A', (short)5), avg(3, 1.0, 2.5f, 4.0));
+    return 0;
+}`);
+  assert.equal(r.status, "ok", JSON.stringify(r.error));
+  assert.equal(r.out, "60 70 2.50\n");
+  const H = "#include <stdio.h>\n#include <stdarg.h>\n";
+  assert.match(error(`${H}int f(int n, ...) { va_list a; va_start(a, n); int x = va_arg(a, int); x += va_arg(a, int); return x; }\nint main(void) { return f(1, 5); }`).title, /더 많이 꺼냈어요/);
+  assert.match(error(`${H}double f(int n, ...) { va_list a; va_start(a, n); return va_arg(a, double); }\nint main(void) { printf("%f", f(1, 5)); return 0; }`).title, /넘어온 값은 int/);
+  assert.match(error(`${H}int f(int n) { va_list a; va_start(a, n); return 0; }\nint main(void) { return f(1); }`).title, /\.\.\. 이 있는 함수/);
+});
+
+test("const 지키기", () => {
+  const M = (body) => `#include <stdio.h>\n#include <string.h>\nint main(void) {\n    ${body}\n    return 0;\n}\n`;
+  assert.match(error(M("const int MAX = 3;\n    MAX = 4;")).title, /const로 정한 'MAX'는 바꿀 수 없어요/);
+  assert.match(error(M("const int a[2] = {1, 2};\n    a[0]++;")).title, /const/);
+  assert.match(error(M("int v = 1;\n    const int *p = &v;\n    *p = 2;")).title, /const/);
+  assert.match(error(M("int v = 1;\n    int *const p = &v;\n    p = NULL;")).title, /'p'/);
+  assert.match(error(M('const char s[10] = "x";\n    strcpy(s, "y");')).title, /strcpy/);
+  assert.match(error(M('const int k = 0;\n    scanf("%d", &k);')).title, /scanf/);
+  const r = run(M('int v = 1;\n    const int *p = &v;\n    v = 5;\n    printf("%d\\n", *p);'));
+  assert.equal(r.out, "5\n");
+});
+
+test("복합 리터럴", () => {
+  const r = run(`#include <stdio.h>
+struct P { int x, y; };
+int total(const int *a, int n) { int s = 0; for (int i = 0; i < n; i++) s += a[i]; return s; }
+int main(void) {
+    int *p = (int[]){10, 20, 30};
+    struct P q = (struct P){.y = 7, .x = 1};
+    printf("%d %d %d\\n", p[2], q.x + q.y, total((int[]){1, 2, 3}, 3));
+    return 0;
+}`);
+  assert.equal(r.status, "ok", JSON.stringify(r.error));
+  assert.equal(r.out, "30 8 6\n");
+});
+
+test("매크로: #, ##, __VA_ARGS__, __LINE__, __func__", () => {
+  const r = run(`#include <stdio.h>
+#define SHOW(x) printf(#x " = %d\\n", x)
+#define STR(s) #s
+#define CAT(a, b) a ## b
+#define LOG(fmt, ...) printf("[%s:%d] " fmt "\\n", __func__, __LINE__, __VA_ARGS__)
+#define DEBUG(fmt, ...) printf(fmt "\\n", ##__VA_ARGS__)
+#define GETTER(name) int get_ ## name(void) { return name; }
+int score = 42;
+GETTER(score)
+void work(void) { LOG("x=%d", 3); }
+int main(void) {
+    int value12 = 7;
+    SHOW(value12 * 2);
+    printf("%s|%s\\n", STR(a  +  b), STR("q" 'c'));
+    printf("%d %d\\n", CAT(value, 12), get_score());
+    work();
+    DEBUG("no args");
+    DEBUG("one %d", 1);
+    printf("%s %s %d\\n", __func__, __FILE__, __LINE__);
+    return 0;
+}`);
+  assert.equal(r.status, "ok", JSON.stringify(r.error));
+  assert.equal(r.out, "value12 * 2 = 14\na + b|\"q\" 'c'\n7 42\n[work:10] x=3\nno args\none 1\nmain main.c 19\n");
+});
+
+test("바이트 단위로 다른 타입 포인터 읽기는 안내해요", () => {
+  const e = error("#include <stdio.h>\nint main(void) { int x = 1; unsigned char *p = (unsigned char *)&x; return p[0]; }");
+  assert.match(e.detail, /union/);
 });

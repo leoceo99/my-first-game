@@ -1,7 +1,7 @@
 // C 프로그램이 실행될 때 필요한 것들: 입출력, 메모리 검사, 표준 라이브러리 함수.
 
 import {
-  T, Ptr, Store, FnRef, ptr, arr, runtimeError, convert, isInt, isFloat, isPtr, isArr, isCharLike, is64, isStruct,
+  T, Ptr, Store, FnRef, ptr, arr, runtimeError, reinterpret, sameType, convert, isInt, isFloat, isPtr, isArr, isCharLike, is64, isStruct,
   typeName, utf8, baseOf, cells, zeroOf, zerosOf,
 } from "./types.js";
 
@@ -142,11 +142,11 @@ export class Runtime {
     return out;
   }
 
-  callFn(ref, args, line, used = true) {
+  callFn(ref, args, line, used = true, types = []) {
     if (!(ref instanceof FnRef)) {
       throw runtimeError(line, "함수 포인터가 아무 함수도 가리키지 않아요", "함수 포인터에 함수 이름을 먼저 넣어 주세요.");
     }
-    return this.invoke(ref.fi, args, line, used);
+    return this.invoke(ref.fi, args, line, used, types);
   }
 
   // ---------- 메모리 ----------
@@ -200,7 +200,8 @@ export class Runtime {
 
   load(p, line) {
     this.check(p, line, false);
-    const v = p.store.cells[p.off];
+    let v = p.store.cells[p.off];
+    if (p.as && v !== undefined) v = this.unionRead(p, v, line);
     if (v === undefined) {
       throw runtimeError(line, `값을 넣지 않은 '${this.describe(p)}'를 사용했어요`,
         "C에서는 변수를 만들기만 하면 쓰레기 값이 들어 있어요. 먼저 값을 넣어 주세요. 예: int x = 0;");
@@ -221,8 +222,29 @@ export class Runtime {
     for (let i = 0; i < values.length; i++) p.store.cells[p.off + i] = values[i];
   }
 
+  /** 공용체: 마지막으로 쓴 멤버와 다른 멤버로 읽으면 비트를 그대로 다시 해석해요. */
+  unionRead(p, v, line) {
+    const tags = p.store.unionTags;
+    const last = tags && tags.get(p.off);
+    if (!last || sameType(last, p.as) || (last.bits === p.as.bits && last.k === p.as.k && last.k === "int")) {
+      if (last && last.k === "int" && p.as.k === "int") return convert(v, last, p.as);
+      if (!last) {
+        // 처음 값으로 채운 공용체: 종류만 맞춰 줘요
+        if (p.as.k === "int" && p.as.bits === 64 && typeof v === "number") return BigInt(Math.trunc(v));
+        if (typeof v === "bigint" && !(p.as.k === "int" && p.as.bits === 64)) return Number(v);
+      }
+      return v;
+    }
+    const out = reinterpret(v, last, p.as);
+    if (out === null) {
+      throw runtimeError(line, "공용체에 넣은 주소(포인터)를 다른 타입으로 읽을 수 없어요", "마지막으로 넣은 멤버로 읽어 주세요.");
+    }
+    return out;
+  }
+
   storeAt(p, v, line) {
     this.check(p, line, true);
+    if (p.as) (p.store.unionTags || (p.store.unionTags = new Map())).set(p.off, p.as);
     p.store.cells[p.off] = v;
   }
 
@@ -256,6 +278,11 @@ export class Runtime {
   /** 화면의 변수 탭에 보여줄 값 */
   formatValue(type, store, off = 0) {
     if (isStruct(type)) {
+      if (type.isUnion) {
+        const last = store.unionTags && store.unionTags.get(off);
+        const f = type.fields.find((x) => last && sameType(x.type, last)) || type.fields[0];
+        return `{${f.name}: ${this.formatValue(f.type, store, off + f.off)}} (공용체)`;
+      }
       return `{${type.fields.map((f) => `${f.name}: ${this.formatValue(f.type, store, off + f.off)}`).join(", ")}}`;
     }
     if (isArr(type)) {
@@ -278,6 +305,7 @@ export class Runtime {
     const v = store.cells[off];
     if (v === undefined) return "?";
     if (v instanceof FnRef) return `→ 함수 ${v.fi.name}`;
+    if (type.k === "valist") return v ? `(가변 인자 ${v.args.length}개 중 ${v.i}개 꺼냄)` : "(비어 있음)";
     if (isPtr(type) && type.to.k === "file") return v === null ? "NULL" : `파일 ${v.name}`;
     if (isPtr(type)) {
       if (v === null) return "NULL";
@@ -761,7 +789,7 @@ export const BUILTINS = {
       rt.write(bytes);
       return bytes.length;
     } },
-  sprintf: { header: "stdio.h", ret: T.int, params: [charPtr, charPtr], variadic: true, format: "printf", formatIndex: 1,
+  sprintf: { writes: [0], header: "stdio.h", ret: T.int, params: [charPtr, charPtr], variadic: true, format: "printf", formatIndex: 1,
     impl(rt, [buf, fmt, ...rest], line) {
       const bytes = formatPrintf(rt, cstr(rt, fmt, line), rest, line);
       rt.writeCString(buf, bytes, line);
@@ -775,7 +803,7 @@ export const BUILTINS = {
   puts: { header: "stdio.h", ret: T.int, params: [charPtr], impl(rt, [s], line) { rt.write([...cstr(rt, s, line), 10]); return 1; } },
   putchar: { header: "stdio.h", ret: T.int, params: [T.int], impl(rt, [c]) { rt.write([c & 255]); return c; } },
   getchar: { header: "stdio.h", ret: T.int, params: [], input: true, impl(rt) { return rt.readByte(); } },
-  fgets: { header: "stdio.h", ret: charPtr, params: [charPtr, T.int, FILE_T], input: true,
+  fgets: { writes: [0], header: "stdio.h", ret: charPtr, params: [charPtr, T.int, FILE_T], input: true,
     impl(rt, [buf, n, file], line) {
       const src = rt.reader(file, line);
       const bytes = [];
@@ -816,7 +844,7 @@ export const BUILTINS = {
     } },
   rewind: { header: "stdio.h", ret: T.void, params: [FILE_T], impl(rt, [f], line) { const h = rt.openHandle(f, line, "any"); h.pos = 0; h.eof = false; } },
   remove: { header: "stdio.h", ret: T.int, params: [charPtr], impl(rt, [n], line) { return rt.files.delete(textOf(rt, n, line)) ? 0 : -1; } },
-  snprintf: { header: "stdio.h", ret: T.int, params: [charPtr, T.ulong, charPtr], variadic: true, format: "printf", formatIndex: 2,
+  snprintf: { writes: [0], header: "stdio.h", ret: T.int, params: [charPtr, T.ulong, charPtr], variadic: true, format: "printf", formatIndex: 2,
     impl(rt, [buf, n, fmt, ...rest], line) {
       const bytes = formatPrintf(rt, cstr(rt, fmt, line), rest, line);
       const max = Number(n);
@@ -845,14 +873,14 @@ export const BUILTINS = {
     } },
 
   strlen: { header: "string.h", ret: T.ulong, params: [charPtr], impl: (rt, [s], line) => BigInt(cstr(rt, s, line).length) },
-  strcpy: { header: "string.h", ret: charPtr, params: [charPtr, charPtr], impl(rt, [d, s], line) { rt.writeCString(d, cstr(rt, s, line), line); return d; } },
-  strncpy: { header: "string.h", ret: charPtr, params: [charPtr, charPtr, T.ulong],
+  strcpy: { writes: [0], header: "string.h", ret: charPtr, params: [charPtr, charPtr], impl(rt, [d, s], line) { rt.writeCString(d, cstr(rt, s, line), line); return d; } },
+  strncpy: { writes: [0], header: "string.h", ret: charPtr, params: [charPtr, charPtr, T.ulong],
     impl(rt, [d, s, n], line) {
       const bytes = cstr(rt, s, line).slice(0, Number(n));
       for (let i = 0; i < Number(n); i++) rt.storeAt(new Ptr(d.store, d.off + i), i < bytes.length ? convert(bytes[i], T.int, T.char) : 0, line);
       return d;
     } },
-  strcat: { header: "string.h", ret: charPtr, params: [charPtr, charPtr],
+  strcat: { writes: [0], header: "string.h", ret: charPtr, params: [charPtr, charPtr],
     impl(rt, [d, s], line) { const a = cstr(rt, d, line); rt.writeCString(d, [...a, ...cstr(rt, s, line)], line); return d; } },
   strcmp: { header: "string.h", ret: T.int, params: [charPtr, charPtr],
     impl(rt, [a, b], line) {
@@ -881,7 +909,7 @@ export const BUILTINS = {
       for (let i = 0; i + b.length <= a.length; i++) if (b.every((x, j) => a[i + j] === x)) return new Ptr(s.store, s.off + i);
       return null;
     } },
-  memset: { header: "string.h", ret: voidPtr, params: [voidPtr, T.int, T.ulong], rawPtr: true,
+  memset: { writes: [0], header: "string.h", ret: voidPtr, params: [voidPtr, T.int, T.ulong], rawPtr: true,
     impl(rt, [p, c, n], line) {
       const count = Number(n);
       const unit = p.store.heap ? p.store.elemSize || 1 : (baseOf(p.store.type).size || 1);
@@ -895,9 +923,9 @@ export const BUILTINS = {
 
   strrchr: { header: "string.h", ret: charPtr, params: [charPtr, T.int],
     impl(rt, [s, c], line) { const i = cstr(rt, s, line).lastIndexOf(c & 255); return i < 0 ? null : new Ptr(s.store, s.off + i); } },
-  strncat: { header: "string.h", ret: charPtr, params: [charPtr, charPtr, T.ulong],
+  strncat: { writes: [0], header: "string.h", ret: charPtr, params: [charPtr, charPtr, T.ulong],
     impl(rt, [d, s, n], line) { rt.writeCString(d, [...cstr(rt, d, line), ...cstr(rt, s, line).slice(0, Number(n))], line); return d; } },
-  strtok: { header: "string.h", ret: charPtr, params: [charPtr, charPtr],
+  strtok: { writes: [0], header: "string.h", ret: charPtr, params: [charPtr, charPtr],
     impl(rt, [s, delim], line) {
       const del = new Set(cstr(rt, delim, line));
       let p = s !== null ? new Ptr(s.store, s.off) : rt.strtok;
@@ -914,7 +942,7 @@ export const BUILTINS = {
       }
       return start;
     } },
-  memcpy: { header: "string.h", ret: voidPtr, params: [voidPtr, voidPtr, T.ulong],
+  memcpy: { writes: [0], header: "string.h", ret: voidPtr, params: [voidPtr, voidPtr, T.ulong],
     impl(rt, [d, s, n], line) {
       rt.check(d, line, true);
       rt.check(s, line, false);

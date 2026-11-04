@@ -19,15 +19,18 @@ C는 외부 컴파일러 없이, 이 저장소에서 직접 만든 C 실행기(`
 **언어 사이 변환**(C ↔ 파이썬 등)의 바탕이 돼요.
 
 - 타입: `int` `double` `char` `long` 등 기본 타입, 배열(다차원, 가변 길이), 포인터와 이중 포인터,
-  **구조체(`struct`)**, **`typedef`**, **`enum`**, **함수 포인터**, `int (*p)[3]` 같은 복잡한 선언
-- 문장: 함수와 재귀, `if` `for` `while` `do` `switch`, `static` 지역 변수, 전역 변수,
-  지정 초기화(`{.x = 1}`, `{[2] = 5}`)
-- 전처리기: `#include` `#define`(매크로 함수 포함) `#if` `#ifdef` `#ifndef` `#elif` `#else` `#endif`
+  **구조체(`struct`)**, **공용체(`union`)**, **비트 필드**, **`typedef`**, **`enum`**, **함수 포인터**,
+  `int (*p)[3]` 같은 복잡한 선언, **`const`**(바꾸려 하면 알려 줘요)
+- 문장: 함수와 재귀, `if` `for` `while` `do` `switch`, **`goto`와 이름표**, `static` 지역 변수, 전역 변수,
+  지정 초기화(`{.x = 1}`, `{[2] = 5}`), **복합 리터럴**(`(int[]){1, 2, 3}`), **가변 인자 함수**(`...`, `<stdarg.h>`)
+- 전처리기: `#include` `#define`(매크로 함수, `#`, `##`, `__VA_ARGS__`) `#if` `#ifdef` `#ifndef` `#elif` `#else` `#endif`,
+  `__LINE__` `__FILE__` `__func__`
 - 입출력: `printf`(실수 반올림까지 진짜 C와 똑같이) `scanf` `getchar` `fgets` `puts`,
   **파일**(`fopen` `fprintf` `fscanf` `fgets` `fputs` `fclose`, 앱 안의 가상 파일), **입력 끝(EOF)** 버튼
 - 라이브러리: `string.h`(`strtok` `memcpy` 포함) `math.h` `ctype.h`
-  `stdlib.h`(`malloc` `calloc` `free` `qsort` `bsearch` `rand`) `time.h`
-- 아직 안 됨: `union`, `goto`, 비트 필드, 가변 인자 함수 만들기(`...`)
+  `stdlib.h`(`malloc` `calloc` `free` `qsort` `bsearch` `rand`) `time.h` `stdarg.h`
+- 다른 점: 값을 바이트로 쪼개 두지 않아서, `int`를 `char *`로 바꿔 한 바이트씩 읽는 코드는 안내 메시지를 보여줘요
+  (같은 메모리를 다른 타입으로 보려면 `union`을 쓰면 돼요)
 - 진짜 C는 그냥 넘어가지만 배우는 사람에게 중요한 실수를 한국어로 잡아 줘요:
   값을 넣지 않은 변수 사용, 배열 범위 벗어남, `scanf`의 `&` 빠뜨림, `%d`/`%f` 형식 불일치,
   `if (x = 5)`, 문자열을 `==`로 비교, 0으로 나누기, 끝없는 재귀, NULL 포인터,
