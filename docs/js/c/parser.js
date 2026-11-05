@@ -32,6 +32,7 @@ class Parser {
     this.i = 0;
     this.includes = includes;
     this.cpp = dialect === "cpp";
+    this.ns = []; // 지금 들어가 있는 이름공간들
     this.tags = new Map(); // struct 이름들
     this.typedefs = [new Map()]; // typedef 이름들 (블록마다 한 층)
     // 헤더가 미리 만들어 둔 타입 이름들
@@ -114,10 +115,15 @@ class Parser {
     let named = null; // struct, enum, typedef 이름으로 정한 타입
     const enums = [];
     let isConst = false;
+    let sawAuto = false;
     while (this.cur.k === "id") {
       if (this.cur.v === "__attribute__" || this.cur.v === "_Alignas") { this.skipAttribute(); continue; }
       const v = this.cur.v;
-      if (STORAGE.has(v)) {
+      if (this.cpp && v === "constexpr") {
+        isConst = true;
+      } else if (this.cpp && v === "auto") {
+        sawAuto = true;
+      } else if (STORAGE.has(v)) {
         if (storage) throw compileError(this.cur.line, `${storage}와 ${v}를 함께 쓸 수 없어요`);
         storage = v;
       } else if (QUALIFIERS.has(v)) {
@@ -139,6 +145,7 @@ class Parser {
       } else break;
       this.next();
     }
+    if (!named && words.length === 0 && sawAuto) named = { k: "auto", name: "auto", size: 0 }; // C++: 처음 값으로 타입을 정해요
     if (!named && words.length === 0) {
       if (storage) throw compileError(line, `${storage} 뒤에 타입(int 등)이 필요해요`);
       return null;
@@ -198,16 +205,32 @@ class Parser {
     return t;
   }
 
+  /** 지금 이름공간 안이면 geo::area 처럼 앞에 붙여요 */
+  nsPath() { return this.ns.join("::"); }
+
+  nsName(name) { return this.ns.length && name && !name.includes("::") ? `${this.nsPath()}::${name}` : name; }
+
+  /** namespace geo { … } : 안의 함수와 변수 이름 앞에 geo:: 가 붙어요 */
+  namespaceBlock(items) {
+    const line = this.next().line;
+    const tok = this.next();
+    if (tok.k !== "id" || KEYWORDS.has(tok.v)) throw compileError(line, "namespace 뒤에는 이름이 와요", "예: namespace geo { … }");
+    this.expect("{", "예: namespace geo { … }");
+    this.ns.push(tok.v);
+    const inner = this.program();
+    this.expect("}", "namespace의 { 를 } 로 닫아 주세요.");
+    this.ns.pop();
+    items.push(...inner.items);
+  }
+
   /** C++: using namespace std;  또는  using std::cout; */
   usingDecl() {
     const line = this.next().line;
     if (this.accept("namespace")) {
       const tok = this.next();
-      if (tok.k !== "id" || tok.v !== "std") {
-        throw compileError(line, "std 말고 다른 이름공간은 C++ 2단계에서 지원해요", "지금은 using namespace std; 만 쓸 수 있어요.");
-      }
+      if (tok.k !== "id") throw compileError(line, "using namespace 뒤에는 이름공간 이름이 와요", "예: using namespace std;");
       this.expect(";");
-      return { k: "using", ns: "std", line };
+      return { k: "using", ns: tok.v, line };
     }
     if (this.cur.k === "id" && this.cur.v.startsWith("std::")) {
       const name = this.next().v.slice(5);
@@ -221,6 +244,7 @@ class Parser {
   cppTagName(tag, t) {
     if (!this.cpp) return;
     this.typedefs[this.typedefs.length - 1].set(tag, t);
+    if (this.ns.length) this.typedefs[0].set(this.nsName(tag), t);
     if (!t.alias) t.alias = tag;
   }
 
@@ -284,14 +308,11 @@ class Parser {
   declarator(base, abstract = false, baseConst = false) {
     const d = this.declaratorParts(abstract);
     // 변수 자체가 const인지: const int x / int *const p
-    const isConst = !d.inner && !d.hasFunc && (d.ptrs === 0 ? baseConst : d.ptrConst[d.ptrs - 1]);
+    const isConst = !d.inner && !d.hasFunc && !d.ref && (d.ptrs === 0 ? baseConst : d.ptrConst[d.ptrs - 1]);
     return { name: d.name, type: d.apply(base, baseConst), line: d.line, isConst };
   }
 
   declaratorParts(abstract) {
-    if (this.cpp && (this.is("&") || this.is("&&"))) {
-      throw compileError(this.cur.line, "C++의 참조(&)는 아직 준비 중이에요 (C++ 2단계)", "지금은 포인터(int *p)로 써 주세요.");
-    }
     let ptrs = 0;
     const ptrConst = [];
     while (this.accept("*")) {
@@ -302,6 +323,12 @@ class Parser {
         this.next();
       }
     }
+    // C++ 참조: int &r, const string &s, int *&p
+    let ref = false;
+    if (this.cpp && this.is("&&")) {
+      throw compileError(this.cur.line, "&& (rvalue 참조)는 아직 지원하지 않아요", "보통 참조 & 나 값으로 받아 주세요.");
+    }
+    if (this.cpp && this.accept("&")) ref = true;
     const line = this.cur.line;
     let inner = null;
     let name = null;
@@ -340,6 +367,10 @@ class Parser {
         if (pointeeConst) t.toConst = true; // const int *p: 가리키는 값을 바꿀 수 없어요
         pointeeConst = ptrConst[k];
       }
+      if (ref) {
+        t = { k: "ref", to: t, size: 8 };
+        if (pointeeConst) t.toConst = true; // const int &r: 참조로 값을 바꿀 수 없어요
+      }
       for (let k = suffixes.length - 1; k >= 0; k--) {
         const sfx = suffixes[k];
         if (sfx.array) t = { k: "array", of: t, lenExpr: sfx.lenExpr, line };
@@ -347,7 +378,7 @@ class Parser {
       }
       return inner ? inner.apply(t) : t;
     };
-    return { name: name ?? (inner ? inner.name : null), line, apply, ptrs, ptrConst, inner, hasFunc: suffixes.some((x) => x.func) };
+    return { name: name ?? (inner ? inner.name : null), line, apply, ptrs, ptrConst, inner, ref, hasFunc: suffixes.some((x) => x.func) };
   }
 
   params() {
@@ -369,7 +400,9 @@ class Parser {
         }
         throw compileError(this.cur.line, `매개변수 '${show(this.cur)}' 앞에 타입이 필요해요`, "예: int add(int a, int b)");
       }
-      params.push(this.declarator(specs.type, true, specs.isConst));
+      const p = this.declarator(specs.type, true, specs.isConst);
+      if (this.cpp && this.accept("=")) p.dflt = this.assignment(); // 기본 인자: int f(int a, int b = 1)
+      params.push(p);
     } while (this.accept(","));
     this.expect(")", "매개변수 목록은 ) 로 닫아요.");
     return { params, variadic };
@@ -390,6 +423,8 @@ class Parser {
       const line = this.cur.line;
       if (this.is("_Static_assert")) { items.push(this.staticAssert()); continue; }
       if (this.cpp && this.is("using")) { items.push(this.usingDecl()); continue; }
+      if (this.cpp && this.is("namespace")) { this.namespaceBlock(items); continue; }
+      if (this.ns.length && this.is("}")) return { items, builtinTypes: this.builtinTypes };
       const specs = this.declSpecs();
       if (!specs) {
         if (this.cur.k === "id" && this.is("(", this.peek())) {
@@ -404,9 +439,14 @@ class Parser {
       const d = this.declarator(specs.type, false, specs.isConst);
       while (this.is("__attribute__")) this.skipAttribute();
       if (d.type.k === "func" && this.is("{")) {
-        items.push({ k: "func", name: d.name, type: d.type, body: this.block(), line: d.line, storage: specs.storage });
+        items.push({ k: "func", name: this.nsName(d.name), type: d.type, body: this.block(), line: d.line, storage: specs.storage, ns: this.nsPath() });
       } else {
-        items.push(this.declRest(specs, d));
+        const decl = this.declRest(specs, d);
+        if (this.ns.length) {
+          decl.ns = this.nsPath();
+          for (const it of decl.items) it.name = this.nsName(it.name);
+        }
+        items.push(decl);
       }
     }
     return { items, builtinTypes: this.builtinTypes };
@@ -523,7 +563,14 @@ class Parser {
           let init = null;
           if (this.isTypeStart()) {
             const specs = this.declSpecs();
-            init = this.declRest(specs, this.declarator(specs.type, false, specs.isConst));
+            const d = this.declarator(specs.type, false, specs.isConst);
+            if (this.cpp && this.accept(":")) {
+              // 범위 기반 for: for (int x : 배열)
+              const range = this.expression();
+              this.expect(")");
+              return { k: "rangefor", decl: { ...d, storage: specs.storage }, range, body: this.statement(), line };
+            }
+            init = this.declRest(specs, d);
           } else {
             if (!this.is(";")) init = { k: "expr", e: this.expression(), line };
             this.expect(";");
@@ -636,6 +683,16 @@ class Parser {
   unary() {
     const tok = this.cur;
     const line = tok.line;
+    if (this.cpp && tok.k === "id" && tok.v === "new") return this.newExpr();
+    if (this.cpp && tok.k === "id" && tok.v === "delete") {
+      this.next();
+      let array = false;
+      if (this.accept("[")) {
+        this.expect("]", "delete[] p 처럼 써요.");
+        array = true;
+      }
+      return { k: "delete", e: this.unary(), array, line };
+    }
     if (tok.k === "op") {
       if (tok.v === "++" || tok.v === "--") {
         this.next();
@@ -737,8 +794,47 @@ class Parser {
     return { k: "staticassert", e, msg, line };
   }
 
+  /** new int, new int(7), new int[n], new Point{1, 2} */
+  newExpr() {
+    const line = this.next().line;
+    const specs = this.declSpecs();
+    if (!specs) throw compileError(line, "new 뒤에는 타입이 와요", "예: new int, new int[10]");
+    let type = specs.type;
+    while (this.accept("*")) type = ptr(type);
+    let count = null;
+    let args = null;
+    let list = null;
+    if (this.accept("[")) {
+      count = this.expression();
+      this.expect("]");
+      if (this.is("[")) throw compileError(line, "new로 2차원 배열은 한 번에 만들 수 없어요", "new int*[n] 을 만든 뒤 줄마다 new int[m] 을 해 주세요.");
+    }
+    if (this.is("(")) {
+      this.next();
+      args = [];
+      if (!this.is(")")) {
+        do args.push(this.assignment()); while (this.accept(","));
+      }
+      this.expect(")");
+    } else if (this.is("{")) {
+      list = this.initializer();
+    }
+    return { k: "new", type, count, args, list, line };
+  }
+
   primary() {
     const tok = this.cur;
+    if (this.cpp && tok.k === "id" && ["static_cast", "const_cast", "reinterpret_cast"].includes(tok.v)) {
+      // static_cast<double>(x) 는 (double)(x) 와 같아요
+      this.next();
+      this.expect("<", `예: ${tok.v}<double>(x)`);
+      const type = this.typeName();
+      this.expect(">");
+      this.expect("(");
+      const e = this.expression();
+      this.expect(")");
+      return { k: "cast", type, e, line: tok.line, named: tok.v };
+    }
     if (tok.k === "id" && tok.v === "_Generic" && this.is("(", this.peek())) {
       // _Generic(식, 타입: 값, ..., default: 값)
       this.next();

@@ -105,7 +105,7 @@ export function sameType(a, b) {
       a.params.every((p, i) => sameType(p.type, b.params[i].type));
   }
   if (a.k === "int" || a.k === "float") return a.name === b.name && a.bits === b.bits;
-  if (a.k === "ptr") return sameType(a.to, b.to);
+  if (a.k === "ptr" || a.k === "ref") return sameType(a.to, b.to);
   if (a.k === "array") {
     // 크기가 실행 중에 정해지는 배열(VLA)은 어떤 크기와도 맞다고 봐요
     const flexible = a.vla || b.vla || a.anyLen || b.anyLen;
@@ -128,6 +128,7 @@ export function typeName(t) {
       return `${typeName(x)} ${dims}`;
     }
     case "func": return `${typeName(t.ret)} (${t.params.map((p) => typeName(p.type)).join(", ")})`;
+    case "ref": return `${t.toConst ? "const " : ""}${typeName(t.to)} &`;
     case "struct": return t.alias || `${t.isUnion ? "union" : "struct"} ${t.tag || "(이름 없음)"}`;
     default: return t.name;
   }

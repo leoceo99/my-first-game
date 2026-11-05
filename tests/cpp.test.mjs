@@ -74,12 +74,8 @@ test("C++ 모드: 아직 없는 기능은 단계와 함께 안내해요", () => 
   const cases = [
     ["#include <vector>\nint main() {}", /<vector>.*다음 단계/],
     ["int main() { class A {}; }", /'class'.*3단계/],
-    ["int main() { int *p = new int; }", /'new'.*2단계/],
-    ["int main() { auto x = 1; }", /'auto'.*2단계/],
-    ["int main() { return Box::size; }", /:: .*2단계/],
-    ["#include <iostream>\nusing namespace std;\nint main() { string s; }", /std::string.*2단계/],
-    ["#include <iostream>\nint main() { std::vector<int> v; }", /std::vector.*2단계/],
-    ["#include <iostream>\nusing namespace std;\nint main() { int &r = *new int; }", /(참조|'new')/],
+    ["int main() { template <typename T> int x; }", /'template'.*5단계/],
+    ["int main() { try { } catch (int e) { } }", /'try'.*6단계/],
   ];
   for (const [code, pattern] of cases) {
     const r = run(code);
@@ -163,13 +159,59 @@ test("C++ 1단계: 실수는 친절하게 알려요", () => {
   }
 });
 
+
+// ---------- 2단계 (앞부분): 참조, 기본 인자, 오버로딩, new/delete, auto, constexpr, 캐스트, 범위 for, 이름공간 ----------
+const H2 = "#include <iostream>\nusing namespace std;\n";
+const STAGE2A = [
+  ["참조 변수", H2 + "int main() { int a = 1; int &r = a; r = 5; r++; cout << a << endl; }", "6\n"],
+  ["참조 매개변수 swap", H2 + "void sw(int &x, int &y) { int t = x; x = y; y = t; }\nint main() { int a = 1, b = 2; sw(a, b); cout << a << b << endl; }", "21\n"],
+  ["const 참조에 값", H2 + "int twice(const int &x) { return x * 2; }\nint main() { cout << twice(21) << endl; }", "42\n"],
+  ["비const 참조에 값은 오류", H2 + "void f(int &x) {}\nint main() { f(3); }", "ERR"],
+  ["참조 반환", H2 + "int arr[3];\nint &at(int i) { return arr[i]; }\nint main() { at(1) = 7; at(1) += 1; cout << arr[1] << endl; }", "8\n"],
+  ["구조체 참조", H2 + "struct P { int x; };\nvoid inc(P &p) { p.x++; }\nint main() { P p = {1}; inc(p); P &q = p; q.x *= 10; cout << p.x << endl; }", "20\n"],
+  ["참조 초기화 없음", H2 + "int main() { int &r; }", "ERR"],
+  ["기본 인자", H2 + "int area(int w, int h = 2) { return w * h; }\nint main() { cout << area(3) << ' ' << area(3, 4) << endl; }", "6 12\n"],
+  ["기본 인자 선언에만", H2 + "int f(int a, int b = 10);\nint main() { cout << f(1) << endl; }\nint f(int a, int b) { return a + b; }", "11\n"],
+  ["오버로딩", H2 + "int sq(int x) { return x * x; }\ndouble sq(double x) { return x * x + 0.5; }\nint main() { cout << sq(3) << ' ' << sq(1.5) << endl; }", "9 2.75\n"],
+  ["오버로딩 개수", H2 + "int add(int a, int b) { return a + b; }\nint add(int a, int b, int c) { return a + b + c; }\nint main() { cout << add(1, 2) << add(1, 2, 3) << endl; }", "36\n"],
+  ["오버로딩 char*", H2 + "void show(int x) { cout << \"int\"; }\nvoid show(const char *s) { cout << \"str\"; }\nint main() { show(1); show(\"a\"); cout << endl; }", "intstr\n"],
+  ["오버로딩 모호", H2 + "void f(int x) {}\nvoid f(double x) {}\nint main() { f(1L); }", "ERR"],
+  ["new/delete", H2 + "int main() { int *p = new int(7); int *q = new int; *q = 3; cout << *p + *q << endl; delete p; delete q; }", "10\n"],
+  ["new 배열", H2 + "int main() { int n = 4; int *a = new int[n]; for (int i = 0; i < n; i++) a[i] = i * i; cout << a[3] << endl; delete[] a; }", "9\n"],
+  ["new 배열 0초기화", H2 + "int main() { int *a = new int[3](); cout << a[0] + a[2] << endl; delete[] a; }", "0\n"],
+  ["new 구조체", H2 + "struct P { int x, y; };\nint main() { P *p = new P{3, 4}; cout << p->x * p->y << endl; delete p; }", "12\n"],
+  ["delete 짝 틀림", H2 + "int main() { int *a = new int[3]; delete a; }", "ERR"],
+  ["두 번 delete", H2 + "int main() { int *a = new int; delete a; delete a; }", "ERR"],
+  ["delete nullptr", H2 + "int main() { int *p = nullptr; delete p; cout << \"ok\" << endl; }", "ok\n"],
+  ["auto", H2 + "int main() { auto a = 3; auto b = 2.5; auto c = 'x'; auto d = a * b; cout << a << b << c << d << sizeof(a) << endl; }", "32.5x7.54\n"],
+  ["auto 참조", H2 + "int main() { int x = 1; auto &r = x; r = 9; cout << x << endl; }", "9\n"],
+  ["auto 처음 값 없음", H2 + "int main() { auto x; }", "ERR"],
+  ["constexpr, const 배열 크기", H2 + "const int N = 3;\nconstexpr int M = N * 2;\nint main() { int a[N] = {1, 2, 3}; int b[M]; cout << sizeof(a) / sizeof(a[0]) << ' ' << sizeof(b) << endl; switch (2) { case N - 1: cout << \"case\" << endl; } }", "3 24\ncase\n"],
+  ["static_cast", H2 + "int main() { int a = 7, b = 2; cout << static_cast<double>(a) / b << ' ' << static_cast<int>(3.9) << endl; }", "3.5 3\n"],
+  ["범위 for", H2 + "int main() { int a[] = {1, 2, 3}; int s = 0; for (int x : a) s += x; for (auto &x : a) x *= 2; for (const auto &x : a) cout << x << ' '; cout << s << endl; }", "2 4 6 6\n"],
+  ["범위 for break/continue", H2 + "int main() { int a[] = {1, 2, 3, 4, 5}; for (int x : a) { if (x == 2) continue; if (x == 4) break; cout << x; } cout << endl; }", "13\n"],
+  ["범위 for 구조체", H2 + "struct P { int x; };\nint main() { P ps[2] = {{1}, {2}}; for (auto &p : ps) p.x += 10; for (P p : ps) cout << p.x << ' '; cout << endl; }", "11 12 \n"],
+  ["범위 for 2차원", H2 + "int main() { int m[2][2] = {{1, 2}, {3, 4}}; for (auto &row : m) for (int v : row) cout << v; cout << endl; }", "1234\n"],
+  ["범위 for 문자열 배열", H2 + "int main() { char s[] = \"hi\"; for (char c : s) if (c) cout << c << '.'; cout << endl; }", "h.i.\n"],
+  ["이름공간", H2 + "namespace geo {\n  const double PI = 3.0;\n  double area(double r) { return PI * r * r; }\n  namespace inner { int f() { return 1; } }\n}\nint main() { cout << geo::area(2) << geo::inner::f() << endl; }", "121\n"],
+  ["이름공간 안에서 짧은 이름", H2 + "namespace m { int twice(int x) { return x * 2; } int four(int x) { return twice(twice(x)); } }\nint main() { cout << m::four(1) << endl; }", "4\n"],
+  ["using namespace 내 이름공간", H2 + "namespace m { int one() { return 1; } }\nusing namespace m;\nint main() { cout << one() << endl; }", "1\n"],
+  ["이름공간 구조체", H2 + "namespace shp { struct Pt { int x; }; }\nint main() { shp::Pt p = {5}; cout << p.x << endl; }", "5\n"],
+  ["swap", H2 + "int main() { int a = 1, b = 2; swap(a, b); double x = 1.5, y = 2.5; std::swap(x, y); cout << a << b << x << y << endl; }", "212.51.5\n"],
+  ["f() 는 f(void)", H2 + "int f() { return 3; }\nint main() { cout << f() << endl; }", "3\n"],
+  ["참조 cin", H2 + "void read(int &x) { cin >> x; }\nint main() { int a; read(a); cout << a * 2 << endl; }", "10\n", ["5"]],
+  ["재귀 + 참조 누적", H2 + "void sum(int n, int &acc) { if (n == 0) return; acc += n; sum(n - 1, acc); }\nint main() { int t = 0; sum(4, t); cout << t << endl; }", "10\n"],
+];
+for (const [name, code, want, inputs] of STAGE2A) {
+  test(`C++ 2단계: ${name}`, () => {
+    const r = run(code, inputs);
+    if (want === "ERR") assert.equal(r.status, "error", r.out);
+    else ok(code, want, inputs);
+  });
+}
+
 // ---------- 앞으로의 단계: 목표 프로그램 ----------
 const TODO = [
-  [2, "참조와 오버로딩, 기본 인자", `#include <cstdio>
-void twice(int &x) { x *= 2; }
-int area(int w, int h = 1) { return w * h; }
-double area(double r) { return 3.0 * r * r; }
-int main() { int n = 5; twice(n); printf("%d %d %.1f\\n", n, area(4), area(1.0)); }`, "10 4 3.0\n"],
   [2, "new/delete와 string, vector", `#include <iostream>
 #include <string>
 #include <vector>

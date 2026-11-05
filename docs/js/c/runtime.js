@@ -329,6 +329,7 @@ export class Runtime {
     const v = store.cells[off];
     if (v === undefined) return "?";
     if (v instanceof FnRef) return `→ 함수 ${v.fi.name}`;
+    if (type.k === "ref") return v instanceof Ptr ? `→ ${this.formatValue(type.to, v.store, v.off)} (참조)` : "?";
     if (type.k === "jmpbuf") return v && v.jmp ? "(돌아올 자리 저장됨)" : "?";
     if (type.k === "valist") return v ? `(가변 인자 ${v.args.length}개 중 ${v.i}개 꺼냄)` : "(비어 있음)";
     if (isPtr(type) && type.to.k === "file") return v === null ? "NULL" : `파일 ${v.name}`;
@@ -895,6 +896,7 @@ export const BUILTINS = {
   free: { header: "stdlib.h", ret: T.void, params: [voidPtr],
     impl(rt, [p], line) {
       if (p === null) return;
+      if (p.store.newKind) throw runtimeError(line, "new로 만든 메모리를 free하려고 했어요", "new로 만든 것은 delete로, new[]로 만든 것은 delete[]로 돌려줘요.");
       if (!p.store.heap || p.off !== 0) throw runtimeError(line, "malloc으로 받지 않은 메모리를 free하려고 했어요");
       if (p.store.freed) throw runtimeError(line, "같은 메모리를 두 번 free했어요");
       p.store.freed = true;

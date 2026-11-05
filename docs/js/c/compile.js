@@ -208,6 +208,8 @@ export class Compiler {
     this.boolT = this.cpp ? T.bool : T.int; // 비교 결과: C는 int, C++는 bool
     this.usingStd = false; // using namespace std;
     this.usingNames = new Set(); // using std::cout;
+    this.usingNs = new Set(); // using namespace geo;
+    this.ns = ""; // 지금 컴파일하는 코드가 들어 있는 이름공간
     this.funcs = new Map();
     this.globalScope = { vars: new Map(), parent: null };
     this.scope = this.globalScope;
@@ -299,6 +301,267 @@ export class Compiler {
     if (MANIP_MAKERS[base]) throw compileError(line, `${base}는 ${base}(값) 처럼 괄호와 함께 써요`, `예: cout << ${base}(2) << x;`);
     const m = MANIPULATORS[base];
     return { t: MANIP, ev: () => m };
+  }
+
+  // ---------- C++ 2단계: 참조, auto, 오버로딩, new/delete, 범위 for, 이름공간 ----------
+  /** 참조를 묶어요: 이름 있는 값(lvalue)이면 그 주소, const 참조면 임시 값의 주소도 돼요. 주소를 돌려주는 ev */
+  bindRef(ref, E, line, what = "참조") {
+    const rt = this.rt;
+    const to = this.need(ref.to, line);
+    if (E.lv && !E.bitfield && (sameType(E.t, to) || (isCharLike(E.t) && isCharLike(to) && E.t.bits === to.bits))) {
+      if (E.isConst && !ref.toConst) {
+        throw compileError(line, `const인 값을 ${typeName(ref)}로 받을 수 없어요`, `const ${typeName(to)} & 로 받으면 돼요.`);
+      }
+      return E.lv;
+    }
+    if (ref.toConst && !isArr(to)) {
+      // const T& 에는 계산 결과도 넣을 수 있어요: 임시 칸을 만들어 가리켜요
+      const V = this.conv(this.value(E, line), to, line, what);
+      const n = cells(to);
+      const multi = isStruct(to);
+      return (f) => {
+        const st = new Store(n, "임시 값", to);
+        const v = V.ev(f);
+        if (multi) st.cells = v.slice();
+        else st.cells[0] = v;
+        return new Ptr(st, 0);
+      };
+    }
+    if (E.lv && !E.bitfield) {
+      throw compileError(line, `${what}의 타입이 맞지 않아요`, `${typeName(ref)}에는 ${typeName(to)} 변수가 와야 하는데 ${typeName(E.t)}를 넣었어요.`);
+    }
+    throw compileError(line, `${what}에는 변수처럼 이름이 있는 값을 넣어야 해요`,
+      `계산 결과나 숫자는 ${typeName(ref)}로 받을 수 없어요. const ${typeName(to)} & 로 받거나 값으로 받아 주세요.`);
+  }
+
+  /** auto가 들어 있는 타입이면 처음 값의 타입으로 바꿔요 */
+  deduceAuto(type, initNode, line, name) {
+    const hasAuto = (t) => t && (t.k === "auto" || ((t.k === "ref" || t.k === "ptr") && hasAuto(t.to)));
+    if (!hasAuto(type)) return type;
+    if (!initNode || initNode.k === "initlist") {
+      throw compileError(line, `auto 변수 '${name}'에는 = 처음 값이 필요해요`, `처음 값을 보고 타입을 정해요. 예: auto ${name} = 0;`);
+    }
+    const E = this.expr(initNode);
+    if (E.builtinName || E.fnName) throw compileError(line, "함수 이름으로는 auto 타입을 정할 수 없어요");
+    const subst = (t, actual) => {
+      if (t.k === "auto") return actual;
+      if (t.k === "ref") return { ...t, to: subst(t.to, actual) };
+      // auto *p = &x;
+      if (!isPtr(actual)) throw compileError(line, `auto *${name} 에는 주소가 와야 해요`);
+      return ptr(subst(t.to, actual.to));
+    };
+    if (type.k === "ref") return { ...type, to: subst(type.to, E.t) };
+    const V = this.value(E, line);
+    if (isVoid(V.t)) throw compileError(line, "void 값으로는 auto 변수를 만들 수 없어요");
+    return subst(type, V.t);
+  }
+
+  /** 같은 이름의 함수(오버로딩) 중에서 넣은 값에 가장 잘 맞는 것을 골라요 */
+  pickOverload(group, args, node, name) {
+    const { line } = node;
+    const rank = (E, to) => {
+      if (to.k === "ref") {
+        if (E.lv && !E.bitfield && sameType(E.t, to.to) && !(E.isConst && !to.toConst)) return 0;
+        if (!to.toConst) return Infinity;
+        return rank({ ...E, lv: null }, to.to);
+      }
+      let V;
+      try { V = this.value(E, line); } catch { return Infinity; }
+      const from = V.t;
+      if (sameType(from, to) && Boolean(from.isBool) === Boolean(to.isBool)) return 0;
+      if (isArith(from) && isArith(to)) {
+        const promo = (isInt(from) && isInt(to) && from.rank < T.int.rank && to === T.int) || (isFloat(from) && from.bits === 32 && to.bits === 64);
+        return promo ? 1 : 2;
+      }
+      if (isPtr(to) && (V.isNull || (isPtr(from) && (sameType(from.to, to.to) || isVoid(to.to))))) return 2;
+      return Infinity;
+    };
+    const viable = [];
+    for (const fi of group) {
+      const ps = fi.type.params;
+      const need = ps.filter((p) => !p.dflt).length;
+      if (args.length < need || (args.length > ps.length && !fi.type.variadic)) continue;
+      const ranks = args.map((E, i) => (ps[i] ? rank(E, ps[i].type) : 3));
+      if (ranks.some((r) => r === Infinity)) continue;
+      viable.push({ fi, ranks });
+    }
+    const better = (a, b) => a.ranks.every((r, i) => r <= b.ranks[i]) && a.ranks.some((r, i) => r < b.ranks[i]);
+    const best = viable.filter((c) => !viable.some((d) => d !== c && better(d, c)));
+    const sig = (fi) => `${fi.name}(${fi.type.params.map((p) => typeName(p.type)).join(", ")})`;
+    if (best.length === 1) return best[0].fi;
+    if (best.length === 0) {
+      throw compileError(line, `넣은 값에 맞는 '${name}' 함수가 없어요`, `있는 함수: ${group.map(sig).join(", ")}`);
+    }
+    throw compileError(line, `'${name}' 함수 중 어느 것을 부를지 정할 수 없어요`,
+      `${best.map((c) => sig(c.fi)).join("와 ")}가 똑같이 잘 맞아요. 값의 타입을 (double)x 처럼 밝혀 주세요.`);
+  }
+
+  /** new int, new int[n], new Point{1, 2} */
+  newExpr(node) {
+    const { line } = node;
+    const rt = this.rt;
+    const type = this.need(this.resolveType(node.type, { line }), line);
+    if (isVoid(type) || isFunc(type) || type.k === "ref") throw compileError(line, `new ${typeName(type)}는 만들 수 없어요`);
+    const unit = cells(type);
+    if (node.count) {
+      const N = this.value(this.expr(node.count), line);
+      if (!isInt(N.t)) throw compileError(line, "new T[개수]의 개수는 정수여야 해요");
+      const zero = Boolean(node.args) || Boolean(node.list);
+      if (node.args && node.args.length) throw compileError(line, "new T[n]( ) 의 괄호 안에는 아무것도 넣지 않아요");
+      const items = node.list ? node.list.items.map((x) => this.conv(this.value(this.expr(x), line), type, line, "new 배열의 처음 값")) : [];
+      const zeros = zerosOf(type);
+      return {
+        t: ptr(type),
+        ev: (f) => {
+          const n = Number(N.ev(f));
+          if (!(n >= 0) || n * unit > 50_000_000) throw runtimeError(line, `new로 ${n}칸을 만들 수 없어요`, "개수가 음수이거나 너무 커요.");
+          if (items.length > n) throw runtimeError(line, `new 배열(${n}칸)에 처음 값이 너무 많아요`);
+          const st = new Store(n * unit, "new 메모리", arr(type, n));
+          if (zero || zeros.some((z) => z === null)) for (let i = 0; i < n * unit; i++) st.cells[i] = zeros[i % unit];
+          items.forEach((E, i) => { st.cells[i * unit] = E.ev(f); });
+          st.heap = true;
+          st.newKind = "array";
+          st.elemSize = type.size;
+          return new Ptr(st, 0);
+        },
+      };
+    }
+    let init = null;
+    if (node.list) init = this.initializer(type, node.list, line, "new");
+    else if (node.args && node.args.length > 1) throw compileError(line, `new ${typeName(type)}(…)에 값이 너무 많아요`, "생성자는 C++ 3단계(클래스)에서 지원해요.");
+    else if (node.args && node.args.length === 1) init = this.initializer(type, node.args[0], line, "new");
+    const zeros = node.args ? zerosOf(type) : null;
+    return {
+      t: ptr(type),
+      ev: (f) => {
+        const st = new Store(unit, "new 메모리", type);
+        if (zeros) st.cells = zeros.slice();
+        if (init) init(f, st);
+        st.heap = true;
+        st.newKind = "single";
+        st.elemSize = type.size;
+        return new Ptr(st, 0);
+      },
+    };
+  }
+
+  deleteExpr(node) {
+    const { line } = node;
+    const P = this.value(this.expr(node.e), line);
+    if (!isPtr(P.t)) throw compileError(line, "delete 뒤에는 new로 만든 주소(포인터)가 와야 해요");
+    const want = node.array ? "array" : "single";
+    return {
+      t: T.void,
+      ev: (f) => {
+        const p = P.ev(f);
+        if (p === null) return; // delete nullptr 은 아무 일도 하지 않아요
+        const st = p.store;
+        if (!st.heap) throw runtimeError(line, "new로 만들지 않은 메모리를 delete했어요", "delete는 new로 만든 주소에만 써요.");
+        if (!st.newKind) throw runtimeError(line, "malloc으로 받은 메모리를 delete했어요", "malloc은 free로, new는 delete로 돌려줘요.");
+        if (st.freed) throw runtimeError(line, "이미 delete한 메모리를 또 delete했어요");
+        if (p.off !== 0) throw runtimeError(line, "new로 받은 주소의 중간을 delete했어요", "new가 돌려준 주소 그대로 delete해 주세요.");
+        if (st.newKind !== want) {
+          throw runtimeError(line, want === "array" ? "new로 만든 하나짜리를 delete[]로 지웠어요" : "new[]로 만든 배열을 delete로 지웠어요",
+            want === "array" ? "new T 는 delete p; 로 지워요." : "new T[n] 은 delete[] p; 로 지워요.");
+        }
+        st.freed = true;
+      },
+    };
+  }
+
+  /** for (int x : 배열) / for (auto &x : 배열) */
+  rangeFor(node) {
+    const { line } = node;
+    const rt = this.rt;
+    this.push();
+    const R = this.expr(node.range);
+    if (!isArr(R.t) || !R.lv) {
+      throw compileError(line, "범위 기반 for의 : 뒤에는 배열이 와야 해요", `${friendlyType(R.t)}는 하나씩 꺼낼 수 없어요.`);
+    }
+    const elem = this.need(R.t.of, line);
+    const stride = cellsDyn(elem);
+    if (typeof stride === "function") throw compileError(line, "크기가 실행 중에 정해지는 2차원 배열은 범위 기반 for로 돌 수 없어요");
+    const total = cellsDyn(R.t);
+    const count = typeof total === "function" ? (f) => total(f) / stride : () => R.t.len;
+    const d = node.decl;
+    let cur = null;
+    const fake = { t: elem, lv: () => cur, ev: () => (isStruct(elem) ? rt.loadStruct(cur, cells(elem), line) : rt.load(cur, line)), varName: `${d.name}의 원소` };
+    let type = d.type;
+    if (type.k === "auto") type = isArr(elem) ? ptr(elem.of) : elem;
+    else if (type.k === "ref" && type.to.k === "auto") type = { ...type, to: elem };
+    type = this.resolveType(type, { line });
+    const slot = this.fn.slotCount++;
+    const info = { name: d.name, type, slot, line: d.line, isConst: d.isConst };
+    this.declare(info);
+    this.fn.locals.push(info);
+    let bind;
+    if (type.k === "ref") {
+      bind = this.bindRef(type, fake, line, `'${d.name}'`);
+    } else {
+      const V = this.conv(this.value(fake, line), type, line, `'${d.name}'`);
+      bind = V.ev;
+    }
+    const isRef = type.k === "ref";
+    const n = cells(type);
+    const multi = isStruct(type);
+    this.loops++;
+    const body = this.statement(node.body);
+    this.loops--;
+    this.pop();
+    const name = d.name;
+    return (f) => {
+      rt.line = line;
+      const base = R.lv(f);
+      const len = count(f);
+      for (let i = 0; i < len; i++) {
+        cur = new Ptr(base.store, base.off + i * stride);
+        const st = new Store(isRef ? 1 : n, name, type);
+        const v = bind(f);
+        if (multi && !isRef) st.cells = v.slice();
+        else st.cells[0] = v;
+        f[slot] = st;
+        const r = body(f);
+        if (r === BREAK) return NORMAL;
+        if (r === RETURN || r === GOTO) return r;
+      }
+      return NORMAL;
+    };
+  }
+
+  /** 이름공간 안이나 using namespace 뒤에서 짧은 이름을 긴 이름(geo::area)으로 찾아요 */
+  resolveName(name) {
+    if (!this.cpp || this.lookup(name) || this.funcs.has(name)) return name;
+    const has = (n) => this.globalScope.vars.has(n) || this.funcs.has(n);
+    const parts = this.ns ? this.ns.split("::") : [];
+    for (let k = parts.length; k > 0; k--) {
+      const full = `${parts.slice(0, k).join("::")}::${name}`;
+      if (has(full)) return full;
+    }
+    for (const ns of this.usingNs) if (has(`${ns}::${name}`)) return `${ns}::${name}`;
+    return name;
+  }
+
+  /** std::swap(a, b) */
+  stdSwap(node) {
+    const { line } = node;
+    const rt = this.rt;
+    if (node.args.length !== 2) throw compileError(line, "swap에는 변수 두 개를 넣어요", "예: swap(a, b);");
+    const A = this.lvalue(node.args[0], "swap");
+    const B = this.lvalue(node.args[1], "swap");
+    if (!sameType(A.t, B.t)) throw compileError(line, `swap의 두 변수는 타입이 같아야 해요 (${typeName(A.t)}와 ${typeName(B.t)})`);
+    if (isArr(A.t)) throw compileError(line, "배열은 swap으로 바꿀 수 없어요");
+    const n = isStruct(A.t) ? cells(A.t) : 1;
+    return {
+      t: T.void,
+      ev: (f) => {
+        const p = A.lv(f);
+        const q = B.lv(f);
+        const a = rt.loadStruct(p, n, line);
+        const b = rt.loadStruct(q, n, line);
+        rt.storeStruct(p, b, line);
+        rt.storeStruct(q, a, line);
+      },
+    };
   }
 
   /** cout << 값 / cin >> 변수 */
@@ -442,6 +705,14 @@ export class Compiler {
       }
       return arr(of, len);
     }
+    if (t.k === "ref") {
+      const to = this.resolveType(t.to, { line: opts.line });
+      if (to.k === "ref") throw compileError(t.line ?? opts.line, "참조의 참조는 만들 수 없어요");
+      return { k: "ref", to, size: 8, toConst: Boolean(t.toConst) };
+    }
+    if (t.k === "auto") {
+      throw compileError(opts.line ?? t.line, "auto는 처음 값이 있는 변수에만 쓸 수 있어요", "예: auto x = 3.5;");
+    }
     if (t.k === "ptr") {
       const out = isStruct(t.to) ? ptr(t.to) : ptr(this.resolveType(t.to, { param: opts.param, allowVla: opts.allowVla, inner: true, line: opts.line }));
       if (t.toConst) out.toConst = true;
@@ -451,8 +722,10 @@ export class Compiler {
     if (t.k === "func") {
       const ret = this.resolveType(t.ret);
       if (isArr(ret)) throw compileError(t.line, "함수는 배열을 돌려줄 수 없어요", "배열 대신 포인터나 구조체를 돌려줘 보세요.");
+      if (ret.k === "ref" && isVoid(ret.to)) throw compileError(t.line, "void의 참조는 돌려줄 수 없어요");
       return {
         ...t,
+        noProto: this.cpp ? false : t.noProto, // C++의 f()는 f(void)와 같아요
         ret,
         params: t.params.map((p) => {
           const pt = this.resolveType(p.type, { param: true });
@@ -659,10 +932,13 @@ export class Compiler {
       case "index": return this.index(node);
       case "member": return this.member(node);
       case "vaarg": return this.vaArg(node);
+      case "new": return this.newExpr(node);
+      case "delete": return this.deleteExpr(node);
       case "compound": return this.compound(node);
       case "cast": return this.cast(node);
       case "sizeof": {
         let t = node.type ? this.resolveType(node.type, { allowVla: Boolean(this.fn) }) : this.expr(node.e).t;
+        if (t.k === "ref") t = t.to; // sizeof(int&) 는 sizeof(int)
         if (t.k === "func" || node.e && this.expr(node.e).fnName) throw compileError(line, "함수에는 sizeof를 쓸 수 없어요");
         if (isDyn(t)) {
           const dims = node.type ? vlaDims(t) : [];
@@ -752,7 +1028,8 @@ export class Compiler {
   }
 
   identifier(node) {
-    const { name, line } = node;
+    const { line } = node;
+    const name = this.resolveName(node.name);
     const info = this.lookup(name);
     if (info) {
       if (info.enumConst !== undefined) {
@@ -805,6 +1082,17 @@ export class Compiler {
   variable(info, line) {
     const rt = this.rt;
     const { type, name } = info;
+    if (type.k === "ref") {
+      // 참조: 칸에는 가리키는 곳의 주소가 들어 있어요
+      const lv = info.store ? () => info.store.cells[0] : (f) => f[info.slot].cells[0];
+      return this.withLoad({ t: type.to, lv, varName: name, isConst: Boolean(type.toConst) }, line);
+    }
+    if (info.constValue !== undefined) {
+      // C++: const int N = 10; 의 N은 상수예요 (배열 크기, case에 쓸 수 있어요)
+      const v = info.constValue;
+      const E = this.variable({ ...info, constValue: undefined }, line);
+      return { ...E, cv: v, ev: () => v };
+    }
     const uninit = () => runtimeError(line, `값을 넣지 않은 변수 '${name}'를 사용했어요`,
       `C에서는 변수를 만들기만 하면 쓰레기 값이 들어 있어요. 먼저 값을 넣어 주세요. 예: ${typeName(type)} ${name} = 0;`);
     if (info.store) {
@@ -1227,7 +1515,7 @@ export class Compiler {
       if (B.t.k === "stream") return this.streamMethod(B, node.callee.name, node);
     }
     if (node.callee.k === "id") {
-      let name = node.callee.name;
+      let name = this.resolveName(node.callee.name);
       const info = this.lookup(name);
       if (this.cpp && !info && !this.funcs.has(name)) {
         const base = this.stdName(name);
@@ -1240,6 +1528,7 @@ export class Compiler {
         }
         if (MANIP_MAKERS[name]) this.stdIdentifier(name, line); // using이 없다고 알려 줘요
         if (base === "min" || base === "max") return this.stdMinMax(base, node);
+        if (base === "swap") return this.stdSwap(node);
         if (name.startsWith("std::")) {
           if (!BUILTINS[base]) this.stdIdentifier(name, line);
           name = base;
@@ -1349,21 +1638,33 @@ export class Compiler {
   }
 
   callUser(fi, node) {
-    return this.callWith(fi.type, node, fi.name, (f, vals, used, types) => this.invoke(fi, vals, node.line, used, types), fi);
+    let pre = null;
+    if (fi.overloads && fi.overloads.length > 1) {
+      pre = node.args.map((a) => this.expr(a));
+      fi = this.pickOverload(fi.overloads, pre, node, fi.name);
+    }
+    const target = fi;
+    return this.callWith(fi.type, node, fi.name, (f, vals, used, types) => this.invoke(target, vals, node.line, used, types), fi, pre);
   }
 
-  callWith(ftype, node, name, run, fi = null) {
+  callWith(ftype, node, name, run, fi = null, pre = null) {
     const { line } = node;
     const params = ftype.params;
     const loose = ftype.noProto && !(fi && fi.def);
-    const countOk = ftype.variadic ? node.args.length >= params.length : node.args.length === params.length;
+    const need = params.filter((p) => !p.dflt).length; // 기본 인자가 있는 매개변수는 빼도 돼요
+    const countOk = ftype.variadic ? node.args.length >= params.length : node.args.length >= need && node.args.length <= params.length;
     if (!loose && !countOk) {
       if (ftype.variadic) throw compileError(line, `함수 '${name}'에는 값이 적어도 ${params.length}개 필요한데 ${node.args.length}개를 넣었어요`);
+      if (need !== params.length) throw compileError(line, `함수 '${name}'에는 값 ${need}~${params.length}개가 필요한데 ${node.args.length}개를 넣었어요`);
       throw this.argCountError(name, params.length, node.args.length, line);
     }
     const extraTypes = [];
-    const args = node.args.map((a, i) => {
-      const E = this.value(this.expr(a), line);
+    const argNodes = [...node.args];
+    for (let i = node.args.length; i < params.length && !ftype.variadic; i++) argNodes.push(params[i].dflt);
+    const args = argNodes.map((a, i) => {
+      const raw = pre && pre[i] ? pre[i] : this.expr(a);
+      if (params[i] && params[i].type.k === "ref") return { ev: this.bindRef(params[i].type, raw, line, `'${name}'의 ${i + 1}번째 값`) };
+      const E = this.value(raw, line);
       if (params[i]) return this.conv(E, params[i].type, line, `'${name}'의 ${i + 1}번째 값`);
       // ... 자리의 값: char, short는 int로, float은 double로 커져서 넘어가요
       const V = isFloat(E.t) ? this.conv(E, T.double, line) : isInt(E.t) ? this.conv(E, promote(E.t), line) : E;
@@ -1372,14 +1673,14 @@ export class Compiler {
     }).map((E) => E.ev);
     const used = !node.unused;
     const n = args.length;
-    return {
-      t: ftype.ret,
-      ev: (f) => {
-        const vals = new Array(n);
-        for (let i = 0; i < n; i++) vals[i] = args[i](f);
-        return run(f, vals, used, extraTypes);
-      },
+    const ev = (f) => {
+      const vals = new Array(n);
+      for (let i = 0; i < n; i++) vals[i] = args[i](f);
+      return run(f, vals, used, extraTypes);
     };
+    // 참조를 돌려주는 함수: 결과가 변수처럼 쓰여요 (f() = 3;)
+    if (ftype.ret.k === "ref") return this.withLoad({ t: ftype.ret.to, lv: ev, isConst: Boolean(ftype.ret.toConst) }, line);
+    return { t: ftype.ret, ev };
   }
 
   argCountError(name, need, got, line) {
@@ -1752,7 +2053,7 @@ export class Compiler {
   declaration(node, global) {
     const closures = [];
     this.declareEnums(node.enums);
-    for (const item of node.items) {
+    for (let item of node.items) {
       if (item.type.k === "func") {
         if (!global) throw compileError(item.line, "함수 안에서 다른 함수를 선언할 수 없어요", "함수 선언은 main 위쪽에 써 주세요.");
         this.declareFunction(item, null);
@@ -1762,7 +2063,12 @@ export class Compiler {
         this.externDeclaration(item, global);
         continue;
       }
+      if (this.cpp) item = { ...item, type: this.deduceAuto(item.type, item.init, item.line, item.name) };
       const type = this.resolveType(item.type, { allowVla: !global, initLen: this.initLength(item.type, item.init) });
+      if (type.k === "ref") {
+        closures.push(...this.refDeclaration(item, type, global));
+        continue;
+      }
       if (isVoid(type)) throw compileError(item.line, `void 타입으로는 변수 '${item.name}'를 만들 수 없어요`);
       const dyn = isDyn(type);
       if (dyn && item.init) throw compileError(item.line, "크기가 변하는 배열에는 처음 값을 넣을 수 없어요");
@@ -1787,7 +2093,7 @@ export class Compiler {
       if (global || item.storage === "static") {
         const st = new Store(size, item.name, type);
         st.cells = zerosOf(type).slice();
-        const info = { name: item.name, type, store: st, line: item.line, global, isConst: item.isConst };
+        const info = { name: item.name, type, store: st, line: item.line, global, isConst: item.isConst, constValue: this.constValueOf(item, type) };
         this.declare(info);
         if (global) this.globals.push(info);
         else this.fn.locals.push(info);
@@ -1796,7 +2102,7 @@ export class Compiler {
         continue;
       }
       const slot = this.fn.slotCount++;
-      const info = { name: item.name, type, slot, line: item.line, vla: dyn, isConst: item.isConst };
+      const info = { name: item.name, type, slot, line: item.line, vla: dyn, isConst: item.isConst, constValue: this.constValueOf(item, type) };
       this.declare(info);
       this.fn.locals.push(info);
       const init = this.initializer(type, item.init, item.line, item.name);
@@ -1834,6 +2140,39 @@ export class Compiler {
     return closures;
   }
 
+  /** C++: 상수로 처음 값을 넣은 const 정수는 상수 식이에요 */
+  constValueOf(item, type) {
+    if (!this.cpp || !item.isConst || !isInt(type) || !item.init || item.init.k === "initlist") return undefined;
+    let E;
+    try { E = this.value(this.expr(item.init), item.line); } catch { return undefined; }
+    return E.cv !== undefined && isArith(E.t) ? convert(E.cv, E.t, type) : undefined;
+  }
+
+  /** int &r = x; */
+  refDeclaration(item, type, global) {
+    const { name, line } = item;
+    if (!item.init) throw compileError(line, `참조 '${name}'는 처음에 무엇을 가리킬지 정해야 해요`, `예: int &${name} = 변수이름;`);
+    const node = item.init.k === "initlist" && item.init.items.length === 1 ? item.init.items[0] : item.init;
+    if (node.k === "initlist") throw compileError(line, `참조 '${name}'에는 값 하나를 넣어요`);
+    const bind = this.bindRef(type, this.expr(node), line, `참조 '${name}'`);
+    if (global || item.storage === "static") {
+      const st = new Store(1, name, type);
+      const info = { name, type, store: st, line, global, isConst: false };
+      this.declare(info);
+      if (global) this.globals.push(info);
+      else this.fn.locals.push(info);
+      let done = false;
+      if (global) this.globalInits.push(() => { st.cells[0] = bind(null); });
+      return global ? [] : [(f) => { if (!done) { st.cells[0] = bind(f); done = true; } return NORMAL; }];
+    }
+    const slot = this.fn.slotCount++;
+    const info = { name, type, slot, line, isConst: false };
+    this.declare(info);
+    this.fn.locals.push(info);
+    const rt = this.rt;
+    return [(f) => { rt.line = line; const st = new Store(1, name, type); st.cells[0] = bind(f); f[slot] = st; return NORMAL; }];
+  }
+
   /** extern int g; : 다른 곳(보통 아래쪽)에서 정의한 전역 변수를 미리 알려요 */
   externDeclaration(item, global) {
     if (item.init) throw compileError(item.line, "extern 선언에는 처음 값을 넣지 않아요", "값은 extern 없이 정의하는 곳에서 넣어요. 예: int g = 7;");
@@ -1865,7 +2204,26 @@ export class Compiler {
       throw compileError(line, `'${name}'는 이미 표준 라이브러리에 있는 함수 이름이에요`, "다른 이름을 써 주세요.");
     }
     if (this.globalScope.vars.has(name)) throw compileError(line, `'${name}'는 이미 변수 이름이에요`);
-    const old = this.funcs.get(name);
+    const group = this.funcs.get(name);
+    let old = group;
+    if (group && this.cpp) {
+      // C++ 오버로딩: 매개변수 타입이 다르면 같은 이름의 다른 함수예요
+      const sameParams = (a, b) => a.params.length === b.params.length && a.params.every((p, i) => sameType(p.type, b.params[i].type) && (p.type.k === "ref") === (b.params[i].type.k === "ref"));
+      old = group.overloads.find((o) => sameParams(o.type, type)) || null;
+      if (!old) {
+        if (name === "main") throw compileError(line, "main 함수는 하나만 만들 수 있어요");
+        const fi = { name, type, def, line, body: null, slotCount: 0, locals: [], params: [], ns: item.ns };
+        fi.ref = new FnRef(fi);
+        group.overloads.push(fi);
+        return fi;
+      }
+      // 앞의 선언에만 적은 기본 인자는 그대로 써요
+      type.params.forEach((p, i) => {
+        const q = old.type.params[i];
+        if (!p.dflt && q.dflt) p.dflt = q.dflt;
+        else if (p.dflt && !q.dflt) q.dflt = p.dflt;
+      });
+    }
     if (old) {
       const same = sameType(old.type.ret, type.ret) &&
         (old.type.noProto || type.noProto || (old.type.params.length === type.params.length &&
@@ -1875,8 +2233,9 @@ export class Compiler {
       if (def) { old.def = def; old.type = type; old.line = line; }
       return old;
     }
-    const fi = { name, type, def, line, body: null, slotCount: 0, locals: [], params: [] };
+    const fi = { name, type, def, line, body: null, slotCount: 0, locals: [], params: [], ns: item.ns };
     fi.ref = new FnRef(fi);
+    fi.overloads = [fi];
     this.funcs.set(name, fi);
     return fi;
   }
@@ -1884,6 +2243,7 @@ export class Compiler {
   compileFunction(fi) {
     const def = fi.def;
     this.fn = fi;
+    this.ns = def.ns || "";
     fi.slotCount = 0;
     fi.locals = [];
     fi.params = [];
@@ -1907,6 +2267,7 @@ export class Compiler {
     const body = this.block(def.body, false);
     const rt = this.rt;
     fi.body = dims.length ? (f) => { fillDims(dims, f, rt); return body(f); } : body;
+    this.ns = "";
     const last = def.body.body[def.body.body.length - 1];
     fi.endLine = last ? last.line : def.body.line;
     this.pop();
@@ -2073,6 +2434,7 @@ export class Compiler {
       case "empty": return () => NORMAL;
       case "staticassert": this.staticAssert(node); return () => NORMAL;
       case "using": this.usingDecl(node); return () => NORMAL;
+      case "rangefor": return this.rangeFor(node);
       case "expr": {
         if (node.e.k === "call") node.e.unused = true;
         const E = this.expr(node.e);
@@ -2161,6 +2523,10 @@ export class Compiler {
         if (isVoid(ret)) {
           throw compileError(line, `void 함수 '${this.fn.name}'는 값을 돌려줄 수 없어요`, "값을 돌려주려면 함수 앞의 void를 int 같은 타입으로 바꿔요.");
         }
+        if (ret.k === "ref") {
+          const ev = this.bindRef(ret, this.expr(node.e), line, "돌려주는 참조");
+          return (f) => { rt.line = line; rt.ret = ev(f); return RETURN; };
+        }
         const E = this.conv(this.value(this.expr(node.e), line), ret, line, "돌려주는 값");
         const ev = E.ev;
         return (f) => { rt.line = line; rt.ret = ev(f); return RETURN; };
@@ -2235,9 +2601,10 @@ export class Compiler {
 
   /** using namespace std; / using std::cout; */
   usingDecl(node) {
-    if (node.ns) this.usingStd = true;
+    if (node.ns === "std") this.usingStd = true;
+    else if (node.ns) this.usingNs.add(node.ns);
     else {
-      if (!STD_STREAMS[node.name] && !MANIPULATORS[node.name] && !MANIP_MAKERS[node.name] && !["min", "max"].includes(node.name) && !BUILTINS[node.name]) {
+      if (!STD_STREAMS[node.name] && !MANIPULATORS[node.name] && !MANIP_MAKERS[node.name] && !["min", "max", "swap"].includes(node.name) && !BUILTINS[node.name]) {
         throw compileError(node.line, `std::${node.name}는 아직 없어요`);
       }
       this.usingNames.add(node.name);
@@ -2263,11 +2630,12 @@ export class Compiler {
     this.rt.builtinTypes = this.builtinTypes;
     // 함수 이름을 먼저 모두 등록해서, 뒤에 만든 함수도 부를 수 있게 해요.
     for (const item of ast.items) {
-      if (item.k === "func") this.declareFunction(item, item);
+      if (item.k === "func") item.fi = this.declareFunction(item, item);
     }
     for (const item of ast.items) {
+      this.ns = item.ns || "";
       if (item.k === "func") {
-        const fi = this.funcs.get(item.name);
+        const fi = item.fi;
         if (fi.def === item) this.compileFunction(fi);
       } else if (item.k === "staticassert") {
         this.staticAssert(item);
