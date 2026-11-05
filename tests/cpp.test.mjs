@@ -4,13 +4,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { runC } from "../docs/js/c/index.js";
 
+/** 앱처럼 입력이 필요할 때마다 답을 하나씩 넣어 다시 실행해요 (이미 본 출력은 다시 나오지 않아요). */
 function run(code, inputs = []) {
   const answers = [];
   let out = "";
+  const prompts = [];
   for (let round = 0; round < 50; round++) {
-    out = "";
-    const r = runC(code, { dialect: "cpp", answers: [...answers], startTime: 1700000000, onOutput: (t) => (out += t) });
-    if (r.status !== "waiting") return { ...r, out };
+    const r = runC(code, {
+      dialect: "cpp", answers: [...answers], startTime: 1700000000, onOutput: (t) => (out += t), onInput: (p) => prompts.push(p),
+    });
+    if (r.status !== "waiting") return { ...r, out, prompts };
     if (answers.length >= inputs.length) throw new Error("입력이 더 필요해요");
     answers.push(inputs[answers.length]);
   }
@@ -69,11 +72,14 @@ test("C++ 모드: void*를 그냥 넣으면 C++ 규칙대로 알려요", () => {
 
 test("C++ 모드: 아직 없는 기능은 단계와 함께 안내해요", () => {
   const cases = [
-    ["#include <iostream>\nint main() {}", /<iostream>.*다음 단계/],
+    ["#include <vector>\nint main() {}", /<vector>.*다음 단계/],
     ["int main() { class A {}; }", /'class'.*3단계/],
     ["int main() { int *p = new int; }", /'new'.*2단계/],
     ["int main() { auto x = 1; }", /'auto'.*2단계/],
-    ["int f(); int main() { return ::f(); }", /:: .*2단계/],
+    ["int main() { return Box::size; }", /:: .*2단계/],
+    ["#include <iostream>\nusing namespace std;\nint main() { string s; }", /std::string.*2단계/],
+    ["#include <iostream>\nint main() { std::vector<int> v; }", /std::vector.*2단계/],
+    ["#include <iostream>\nusing namespace std;\nint main() { int &r = *new int; }", /(참조|'new')/],
   ];
   for (const [code, pattern] of cases) {
     const r = run(code);
@@ -89,15 +95,76 @@ test("C++ 낱말도 C 모드에서는 보통 이름이에요", () => {
   assert.equal(out, "3");
 });
 
-// ---------- 앞으로의 단계: 목표 프로그램 ----------
-const TODO = [
-  [1, "cout과 cin", `#include <iostream>
+
+// ---------- 1단계: <iostream>, <iomanip> ----------
+test("C++ 1단계: cin으로 읽고 cout으로 출력, 질문은 말풍선으로", () => {
+  const r = run(`#include <iostream>
 using namespace std;
 int main() {
     int a, b;
-    cin >> a >> b;
+    cout << "첫 번째 수? ";
+    cin >> a;
+    cout << "두 번째 수? ";
+    cin >> b;
     cout << "합: " << a + b << endl;
-}`, "합: 7\n", ["3 4"]],
+}`, ["3", "4"]);
+  assert.equal(r.status, "ok", JSON.stringify(r.error));
+  assert.deepEqual(r.prompts, ["첫 번째 수? ", "두 번째 수? "]);
+  assert.equal(r.out, "합: 7\n");
+});
+
+const H1 = "#include <iostream>\n#include <iomanip>\nusing namespace std;\n";
+const STAGE1 = [
+  ["한 줄에 두 값", H1 + 'int main() { int a, b; cin >> a >> b; cout << "합: " << a + b << endl; }', "합: 7\n", ["3 4"]],
+  ["std:: 붙여 쓰기", '#include <iostream>\nint main() { std::cout << "x=" << 5 << std::endl; return 0; }', "x=5\n"],
+  ["using std::cout", "#include <iostream>\nusing std::cout; using std::endl;\nint main() { cout << 1 << endl; }", "1\n"],
+  ["char, bool, double 출력 규칙", H1 + "int main() { char c = 'A'; bool b = true; cout << c << ' ' << b << ' ' << 3.14159265 << ' ' << 2.5 << ' ' << 1e20 << ' ' << 100.0 << endl; }", "A 1 3.14159 2.5 1e+20 100\n"],
+  ["boolalpha와 비교 결과(bool)", H1 + "int main() { cout << boolalpha << (3 > 2) << ' ' << (1 == 2) << ' ' << !true << endl; }", "true false false\n"],
+  ["fixed와 setprecision", H1 + "int main() { cout << fixed << setprecision(2) << 2.0 / 3 << ' ' << 10.0 << endl; }", "0.67 10.00\n"],
+  ["setprecision만 쓰면 유효숫자", H1 + "int main() { cout << setprecision(3) << 3.14159 << ' ' << 1234.5 << endl; }", "3.14 1.23e+03\n"],
+  ["setw, setfill, left", H1 + "int main() { cout << setw(5) << 42 << '|' << setfill('0') << setw(4) << 7 << '|' << left << setfill(' ') << setw(4) << \"ab\" << '|' << endl; }", "   42|0007|ab  |\n"],
+  ["hex, dec, showpoint, showpos", H1 + "int main() { cout << hex << 255 << ' ' << -1 << dec << ' ' << 10 << ' ' << showpoint << 2.0 << ' ' << noshowpoint << showpos << 3 << endl; }", "ff ffffffff 10 2.00000 +3\n"],
+  ["while (cin >> x)는 입력 끝(EOF)까지", H1 + "int main() { int x, s = 0; while (cin >> x) s += x; cout << s << endl; }", "6\n", ["1 2", "3", null]],
+  ["숫자 자리에 글자: 실패하고 0, clear와 ignore", H1 + "int main() { int x = 5; cin >> x; if (cin.fail()) cout << \"fail \" << x << endl; cin.clear(); cin.ignore(100, '\\n'); cin >> x; cout << x << endl; }", "fail 0\n9\n", ["abc", "9"]],
+  ["char 배열과 char 읽기", H1 + "int main() { char name[20]; char a, b; cin >> name >> a >> b; cout << name << b << a << endl; }", "민지yx\n", ["민지 x y"]],
+  ["double과 float 읽기", H1 + "int main() { double d; float f; cin >> d >> f; cout << d * 2 << ' ' << f << endl; }", "5 0.1\n", ["2.5 0.1"]],
+  ["cin.get은 공백도 읽어요", H1 + "int main() { char c = cin.get(); cout << (int)c << endl; }", "32\n", [" a"]],
+  ["printf와 섞어 써도 순서대로", "#include <iostream>\n#include <cstdio>\nusing namespace std;\nint main() { cout << \"a\"; printf(\"b\"); cout << \"c\" << endl; printf(\"%d\\n\", 1 < 2); }", "abc\n1\n"],
+  ["std::min, std::max", H1 + "int main() { cout << max(3, 7) << min(2.5, 1.5) << std::max('a', 'b') << endl; }", "71.5b\n"],
+  ["cerr도 화면에", H1 + "int main() { cerr << \"err\" << endl; }", "err\n"],
+  ["char *는 문자열로", H1 + "int main() { const char *s = \"hi\"; cout << s << ' ' << (s == nullptr) << endl; }", "hi 0\n"],
+  ["<bits/stdc++.h>", "#include <bits/stdc++.h>\nusing namespace std;\nint main() { cout << sqrt(16.0) << ' ' << strlen(\"abc\") << endl; }", "4 3\n"],
+  ["long long, unsigned", H1 + "int main() { long long a = 1LL << 40; unsigned u = 4000000000u; cout << a << ' ' << u << ' ' << -5 << endl; }", "1099511627776 4000000000 -5\n"],
+  ["setw로 표 만들기", H1 + "int main() { for (int i = 1; i <= 3; i++) cout << setw(2) << i << \" x 3 = \" << setw(2) << i * 3 << \"\\n\"; }", " 1 x 3 =  3\n 2 x 3 =  6\n 3 x 3 =  9\n"],
+  ["sizeof('a')는 C++에서 1", H1 + "int main() { cout << sizeof('a') << endl; }", "1\n"],
+];
+for (const [name, code, want, inputs] of STAGE1) {
+  test(`C++ 1단계: ${name}`, () => ok(code, want, inputs));
+}
+
+test("C++ 1단계: 실수는 친절하게 알려요", () => {
+  const cases = [
+    ["#include <iostream>\nint main() { cout << 1; }", /'cout'는 std::cout/],
+    ["using namespace std;\nint main() { cout << 1; }", /#include <iostream>/],
+    [H1 + "int main() { int x; cout >> x; }", /cout에는 <</],
+    [H1 + "int main() { int x; cin << x; }", /cin에는 >>/],
+    [H1 + "int main() { cin >> 5; }", /변수가 와야/],
+    [H1 + "int main() { int a[3]; cin >> a; }", /배열 전체/],
+    [H1 + "struct P { int x; };\nint main() { P p; cout << p; }", /구조체/],
+    [H1 + "int main() { cout << max(3, 7.5); }", /타입이 같아야/],
+    ["#include <iostream>\nusing namespace std;\nint main() { cout << setw(3) << 1; }", /<iomanip>/],
+    [H1 + "int main() { cin.getline(); }", /cin\.getline\(\)는 아직/],
+    ["#include <iostream>\nint main() { printf(\"x\"); }", /<cstdio>/],
+  ];
+  for (const [code, pattern] of cases) {
+    const r = run(code);
+    assert.equal(r.status, "error", code);
+    assert.match(r.error.title, pattern, code);
+  }
+});
+
+// ---------- 앞으로의 단계: 목표 프로그램 ----------
+const TODO = [
   [2, "참조와 오버로딩, 기본 인자", `#include <cstdio>
 void twice(int &x) { x *= 2; }
 int area(int w, int h = 1) { return w * h; }

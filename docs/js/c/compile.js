@@ -5,7 +5,11 @@ import {
   alignOf, utf8, isInt, isFloat, isArith, isPtr, isArr, isScalar, is64, isVoid, isCharLike, isStruct, isFunc, isFuncPtr,
   sameType, common, promote, typeName, friendlyType,
 } from "./types.js";
-import { BUILTINS, FILE_T, STDIN, STDOUT, STDERR, JumpSignal, parseFormat, retypeHeap } from "./runtime.js";
+import {
+  BUILTINS, FILE_T, STDIN, STDOUT, STDERR, JumpSignal, parseFormat, retypeHeap,
+  MANIP, STD_STREAMS, MANIPULATORS, MANIP_MAKERS, streamPut, streamGet, streamGetChar, streamIgnore,
+} from "./runtime.js";
+import { CPP_C_HEADERS, STD_LATER } from "./lexer.js";
 
 const NORMAL = 0;
 const BREAK = 1;
@@ -201,6 +205,9 @@ export class Compiler {
     this.rt = rt;
     this.includes = includes;
     this.cpp = dialect === "cpp";
+    this.boolT = this.cpp ? T.bool : T.int; // 비교 결과: C는 int, C++는 bool
+    this.usingStd = false; // using namespace std;
+    this.usingNames = new Set(); // using std::cout;
     this.funcs = new Map();
     this.globalScope = { vars: new Map(), parent: null };
     this.scope = this.globalScope;
@@ -255,8 +262,149 @@ export class Compiler {
 
   needHeader(h, what, line) {
     if (!this.hasHeader(h)) {
-      throw compileError(line, `${what}를 쓰려면 #include <${h}>가 필요해요`, `맨 위에 #include <${h}> 를 넣어 주세요.`);
+      // C++에서는 <stdio.h> 대신 <cstdio> 처럼 써요
+      const cppName = this.cpp ? Object.keys(CPP_C_HEADERS).find((k) => CPP_C_HEADERS[k] === h) : null;
+      const shown = cppName || h;
+      throw compileError(line, `${what}를 쓰려면 #include <${shown}>가 필요해요`, `맨 위에 #include <${shown}> 를 넣어 주세요.`);
     }
+  }
+
+  // ---------- C++: std 이름 ----------
+  /** std::cout → "cout". using namespace std; 뒤라면 cout → "cout". std 이름이 아니면 null */
+  stdName(name) {
+    if (!this.cpp) return null;
+    if (name.startsWith("std::")) return name.slice(5);
+    if (this.usingStd || this.usingNames.has(name)) return name;
+    return null;
+  }
+
+  /** cout, cin, endl, fixed … 같은 std 이름을 식으로 만들어요. 해당하지 않으면 null */
+  stdIdentifier(name, line) {
+    const base = name.startsWith("std::") ? name.slice(5) : name;
+    const known = STD_STREAMS[base] || MANIPULATORS[base] || MANIP_MAKERS[base];
+    if (!known) {
+      if (name.startsWith("std::") && !BUILTINS[base]) {
+        throw compileError(line, `std::${base}는 아직 없어요`, Object.hasOwn(STD_LATER, base) ? `C++ ${STD_LATER[base]}단계에서 만들 예정이에요.` : "이름에 오타가 있는지 확인해 보세요.");
+      }
+      return null;
+    }
+    if (this.stdName(name) === null) {
+      throw compileError(line, `'${name}'는 std::${name}이에요`, `맨 위(#include 아래)에 using namespace std; 를 넣거나 std::${name} 처럼 써요.`);
+    }
+    this.needHeader(MANIP_MAKERS[base] ? "iomanip" : "iostream", `std::${base}`, line);
+    if (STD_STREAMS[base]) {
+      const { stream, type } = STD_STREAMS[base];
+      return { t: type, ev: () => stream, varName: base };
+    }
+    if (MANIP_MAKERS[base]) throw compileError(line, `${base}는 ${base}(값) 처럼 괄호와 함께 써요`, `예: cout << ${base}(2) << x;`);
+    const m = MANIPULATORS[base];
+    return { t: MANIP, ev: () => m };
+  }
+
+  /** cout << 값 / cin >> 변수 */
+  streamOp(node, L) {
+    const { op, line } = node;
+    const rt = this.rt;
+    const name = L.varName || (L.t.dir === "out" ? "cout" : "cin");
+    if (L.t.dir === "out") {
+      if (op !== "<<") throw compileError(line, `${name}에는 << 를 써요`, `예: ${name} << x;  (읽을 때는 cin >> x;)`);
+      const R = this.value(this.expr(node.r), line);
+      const t = R.t;
+      if (isStruct(t)) {
+        throw compileError(line, `구조체(${typeName(t)})는 cout으로 바로 출력할 수 없어요`, "멤버를 하나씩 출력해 주세요. 예: cout << p.x << \" \" << p.y;  (operator<<는 C++ 4단계)");
+      }
+      if (t.k === "stream") throw compileError(line, `${name} << 뒤에 스트림이 또 왔어요`, "예: cout << a << b;");
+      if (!isArith(t) && !isPtr(t) && t.k !== "manip") throw compileError(line, `${friendlyType(t)}는 cout으로 출력할 수 없어요`);
+      const lev = L.ev;
+      const rev = R.ev;
+      return { t: L.t, varName: name, ev: (f) => { const s = lev(f); streamPut(rt, s, t, rev(f), line); return s; } };
+    }
+    if (op !== ">>") throw compileError(line, `${name}에는 >> 를 써요`, `예: ${name} >> x;  (출력할 때는 cout << x;)`);
+    const R = this.expr(node.r);
+    const t = R.t;
+    const what = node.r.k === "id" ? `'${node.r.name}'` : "이 값";
+    if (!R.lv) throw compileError(line, `cin >> 뒤에는 값을 넣을 변수가 와야 해요`, `${what}에는 값을 넣을 수 없어요.`);
+    if (R.isConst) throw compileError(line, `const로 정한 ${what}에는 cin으로 값을 넣을 수 없어요`);
+    if (R.bitfield) throw compileError(line, "비트 필드에는 cin으로 바로 읽을 수 없어요", "일반 변수에 읽은 뒤 옮겨 담아 주세요.");
+    if (isArr(t) && !isCharLike(t.of)) throw compileError(line, "배열 전체는 cin으로 한 번에 읽을 수 없어요", "for 문으로 cin >> a[i]; 처럼 한 칸씩 읽어요.");
+    if (isPtr(t)) throw compileError(line, "char * 에는 cin으로 글자를 읽을 수 없어요", "char 이름[크기]; 배열을 만들어서 cin >> 이름; 처럼 읽어요.");
+    if (isStruct(t)) throw compileError(line, `구조체(${typeName(t)})는 cin으로 바로 읽을 수 없어요`, "멤버를 하나씩 읽어 주세요. 예: cin >> p.x >> p.y;");
+    if (!isArith(t) && !isArr(t)) throw compileError(line, `${friendlyType(t)}에는 cin으로 읽을 수 없어요`);
+    const lev = L.ev;
+    const target = R.lv;
+    return { t: L.t, varName: name, ev: (f) => { const s = lev(f); streamGet(rt, target(f), t, line); return s; } };
+  }
+
+  /** cin.get(), cin.fail(), cout.flush() 같은 스트림 함수 */
+  streamMethod(B, name, node) {
+    const { line } = node;
+    const rt = this.rt;
+    const S = B.ev;
+    const who = B.varName || "스트림";
+    const args = node.args.map((a) => this.value(this.expr(a), line));
+    const intArg = (i, dflt) => (args[i] ? this.conv(args[i], T.int, line).ev : () => dflt);
+    const st = (f) => rt.streamState(S(f));
+    const want = (n) => {
+      if (args.length > n) throw compileError(line, `${who}.${name}()에 값을 너무 많이 넣었어요`);
+    };
+    if (B.t.dir === "in") {
+      switch (name) {
+        case "get": want(0); return { t: T.int, ev: () => streamGetChar(rt, line) };
+        case "peek": want(0); return { t: T.int, ev: (f) => { const s = st(f); if (s.fail) return -1; const b = rt.reader(STDIN, line).peek(); if (b < 0) s.eof = true; return b; } };
+        case "eof": want(0); return { t: T.bool, ev: (f) => (st(f).eof ? 1 : 0) };
+        case "fail": want(0); return { t: T.bool, ev: (f) => (st(f).fail ? 1 : 0) };
+        case "good": want(0); return { t: T.bool, ev: (f) => (st(f).fail || st(f).eof ? 0 : 1) };
+        case "bad": want(0); return { t: T.bool, ev: () => 0 };
+        case "clear": want(0); return { t: T.void, ev: (f) => { const s = st(f); s.fail = false; s.eof = false; } };
+        case "ignore": {
+          want(2);
+          const n = intArg(0, 1);
+          const d = intArg(1, -1);
+          return { t: T.void, ev: (f) => streamIgnore(rt, Number(n(f)), Number(d(f)), line) };
+        }
+        default: break;
+      }
+    } else {
+      switch (name) {
+        case "flush": want(0); return { t: B.t, ev: S };
+        case "put": {
+          want(1);
+          const c = intArg(0, 0);
+          return { t: B.t, ev: (f) => { const s = S(f); rt.writeTo(s, [Number(c(f)) & 255], line); return s; } };
+        }
+        case "precision": {
+          want(1);
+          const n = args[0] ? intArg(0, 6) : null;
+          return { t: T.long, ev: (f) => { const s = st(f); const old = s.precision; if (n) s.precision = Number(n(f)); return BigInt(old); } };
+        }
+        case "width": {
+          want(1);
+          const n = args[0] ? intArg(0, 0) : null;
+          return { t: T.long, ev: (f) => { const s = st(f); const old = s.width; if (n) s.width = Number(n(f)); return BigInt(old); } };
+        }
+        default: break;
+      }
+    }
+    throw compileError(line, `${who}.${name}()는 아직 없어요`,
+      B.t.dir === "in" ? "쓸 수 있는 것: get, peek, ignore, eof, fail, good, clear" : "쓸 수 있는 것: flush, put, precision, width");
+  }
+
+  /** std::min, std::max: 두 값의 타입이 같아야 해요 (진짜 C++처럼) */
+  stdMinMax(name, node) {
+    const { line } = node;
+    if (node.args.length !== 2) throw compileError(line, `${name}에는 값 두 개를 넣어요`, `예: ${name}(a, b)`);
+    const A = this.value(this.expr(node.args[0]), line);
+    const B = this.value(this.expr(node.args[1]), line);
+    if (!isArith(A.t) || !isArith(B.t)) throw compileError(line, `${name}에는 숫자만 넣을 수 있어요`);
+    if (!sameType(A.t, B.t)) {
+      throw compileError(line, `${name}의 두 값은 타입이 같아야 해요 (${typeName(A.t)}와 ${typeName(B.t)})`,
+        "C++의 std::min/max는 같은 타입끼리만 비교해요. (double)x 처럼 한쪽을 바꿔 주세요.");
+    }
+    const a = A.ev;
+    const b = B.ev;
+    return name === "max"
+      ? { t: A.t, ev: (f) => { const x = a(f); const y = b(f); return x < y ? y : x; } }
+      : { t: A.t, ev: (f) => { const x = a(f); const y = b(f); return y < x ? y : x; } };
   }
 
   // ---------- 타입 ----------
@@ -615,6 +763,11 @@ export class Compiler {
     }
     const fi = this.funcs.get(name);
     if (fi) return { t: fi.type, ev: () => fi.ref, fnName: name };
+    if (this.cpp) {
+      const E = this.stdIdentifier(name, line);
+      if (E) return E;
+      if (name.startsWith("std::")) return { t: T.void, builtinName: name.slice(5) };
+    }
     if (BUILTINS[name]) return { t: T.void, builtinName: name };
     if (name === "true" || name === "false") {
       this.needHeader("stdbool.h", name, line);
@@ -771,10 +924,11 @@ export class Compiler {
       const L = this.condition(node.l, true);
       const R = this.condition(node.r, true);
       return op === "&&"
-        ? { t: T.int, ev: (f) => (truthy(L(f)) && truthy(R(f)) ? 1 : 0) }
-        : { t: T.int, ev: (f) => (truthy(L(f)) || truthy(R(f)) ? 1 : 0) };
+        ? { t: this.boolT, ev: (f) => (truthy(L(f)) && truthy(R(f)) ? 1 : 0) }
+        : { t: this.boolT, ev: (f) => (truthy(L(f)) || truthy(R(f)) ? 1 : 0) };
     }
     const L = this.value(this.expr(node.l), line);
+    if (L.t.k === "stream") return this.streamOp(node, L);
     const R = this.value(this.expr(node.r), line);
     return this.binaryValues(op, L, R, line);
   }
@@ -788,9 +942,9 @@ export class Compiler {
         const cmp = COMPARE[op];
         if (a.cv !== undefined && b.cv !== undefined) {
           const v = cmp(a.cv, b.cv);
-          return { t: T.int, ev: () => v, cv: v };
+          return { t: this.boolT, ev: () => v, cv: v };
         }
-        return { t: T.int, ev: (f) => cmp(a.ev(f), b.ev(f)) };
+        return { t: this.boolT, ev: (f) => cmp(a.ev(f), b.ev(f)) };
       }
       if ((isPtr(L.t) || L.isNull) && (isPtr(R.t) || R.isNull)) {
         const strlit = (L.from && L.from.strlit) || (R.from && R.from.strlit);
@@ -799,7 +953,7 @@ export class Compiler {
             "글자가 같은지 보려면 strcmp(a, b) == 0 을 써요. (#include <string.h> 필요)");
         }
         const cmp = ptrCompare(op, line);
-        return { t: T.int, ev: (f) => cmp(L.ev(f), R.ev(f)) };
+        return { t: this.boolT, ev: (f) => cmp(L.ev(f), R.ev(f)) };
       }
       if (isStruct(L.t) || isStruct(R.t)) {
         throw compileError(line, `구조체는 ${op} 로 한 번에 비교할 수 없어요`, "멤버를 하나씩 비교해 주세요. 예: a.x == b.x && a.y == b.y");
@@ -937,9 +1091,13 @@ export class Compiler {
       return this.withLoad({ t: this.need(P.t.to, line), lv, isConst: Boolean(P.t.toConst) }, line);
     }
     const E = this.value(this.expr(node.e), line);
+    if (op === "!" && E.t.k === "stream") {
+      const S = E.ev;
+      return { t: T.bool, ev: (f) => (rt.streamState(S(f)).fail ? 1 : 0) };
+    }
     if (op === "!") {
       if (!isScalar(E.t)) throw compileError(line, "'!'는 참/거짓으로 볼 수 있는 값에만 쓸 수 있어요");
-      return { t: T.int, ev: (f) => (truthy(E.ev(f)) ? 0 : 1), cv: E.cv !== undefined ? (truthy(E.cv) ? 0 : 1) : undefined };
+      return { t: this.boolT, ev: (f) => (truthy(E.ev(f)) ? 0 : 1), cv: E.cv !== undefined ? (truthy(E.cv) ? 0 : 1) : undefined };
     }
     if (!isArith(E.t)) throw compileError(line, `'${op}'는 숫자에만 쓸 수 있어요`);
     if (op === "~" && !isInt(E.t)) throw compileError(line, "'~'는 정수에만 쓸 수 있어요");
@@ -1064,9 +1222,31 @@ export class Compiler {
   // ---------- 함수 호출 ----------
   call(node) {
     const { line } = node;
+    if (this.cpp && node.callee.k === "member" && !node.callee.arrow) {
+      const B = this.expr(node.callee.e);
+      if (B.t.k === "stream") return this.streamMethod(B, node.callee.name, node);
+    }
     if (node.callee.k === "id") {
-      const name = node.callee.name;
+      let name = node.callee.name;
       const info = this.lookup(name);
+      if (this.cpp && !info && !this.funcs.has(name)) {
+        const base = this.stdName(name);
+        if (base !== null && MANIP_MAKERS[base]) {
+          this.needHeader("iomanip", `std::${base}`, line);
+          if (node.args.length !== 1) throw compileError(line, `${base}에는 값 하나를 넣어요`, `예: ${base}(2)`);
+          const A = this.conv(this.value(this.expr(node.args[0]), line), T.int, line, `${base}의 값`);
+          const make = MANIP_MAKERS[base];
+          return { t: MANIP, ev: (f) => make(Number(A.ev(f))) };
+        }
+        if (MANIP_MAKERS[name]) this.stdIdentifier(name, line); // using이 없다고 알려 줘요
+        if (base === "min" || base === "max") return this.stdMinMax(base, node);
+        if (name.startsWith("std::")) {
+          if (!BUILTINS[base]) this.stdIdentifier(name, line);
+          name = base;
+        } else if (!BUILTINS[name] && Object.hasOwn(STD_LATER, name)) {
+          throw compileError(line, `C++의 ${name}()은 아직 준비 중이에요 (C++ ${STD_LATER[name]}단계)`, "지금은 C 방식의 함수와 cout, cin을 쓸 수 있어요.");
+        }
+      }
       if (!info && ["va_start", "va_end", "va_copy"].includes(name) && this.hasHeader("stdarg.h")) {
         return this.stdarg(name, node);
       }
@@ -1740,6 +1920,12 @@ export class Compiler {
         "같은지 비교하려면 == 를 써요. 예: if (x == 5). 정말 값을 넣으려면 괄호를 한 번 더 씌워 주세요.");
     }
     const E = this.value(this.expr(node), node.line);
+    if (E.t.k === "stream") {
+      // while (cin >> x): 읽기에 성공하면 참
+      const rt = this.rt;
+      const S = E.ev;
+      return (f) => (rt.streamState(S(f)).fail ? 0 : 1);
+    }
     if (!isScalar(E.t)) throw compileError(node.line, "조건에는 참/거짓으로 볼 수 있는 값이 와야 해요");
     return E.ev;
   }
@@ -1886,6 +2072,7 @@ export class Compiler {
       case "decl": return this.seq(this.declaration(node, false));
       case "empty": return () => NORMAL;
       case "staticassert": this.staticAssert(node); return () => NORMAL;
+      case "using": this.usingDecl(node); return () => NORMAL;
       case "expr": {
         if (node.e.k === "call") node.e.unused = true;
         const E = this.expr(node.e);
@@ -2046,6 +2233,17 @@ export class Compiler {
     };
   }
 
+  /** using namespace std; / using std::cout; */
+  usingDecl(node) {
+    if (node.ns) this.usingStd = true;
+    else {
+      if (!STD_STREAMS[node.name] && !MANIPULATORS[node.name] && !MANIP_MAKERS[node.name] && !["min", "max"].includes(node.name) && !BUILTINS[node.name]) {
+        throw compileError(node.line, `std::${node.name}는 아직 없어요`);
+      }
+      this.usingNames.add(node.name);
+    }
+  }
+
   /** _Static_assert(조건, "설명"): 컴파일할 때 조건을 확인해요 */
   staticAssert(node) {
     const E = this.value(this.expr(node.e), node.line);
@@ -2073,6 +2271,8 @@ export class Compiler {
         if (fi.def === item) this.compileFunction(fi);
       } else if (item.k === "staticassert") {
         this.staticAssert(item);
+      } else if (item.k === "using") {
+        this.usingDecl(item);
       } else {
         this.declaration(item, true);
       }

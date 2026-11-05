@@ -16,15 +16,27 @@ export const CPP_C_HEADERS = {
 
 // C++ 표준 라이브러리 헤더: C++ 도입 단계에서 하나씩 만들 예정이에요 (design/cpp-plan.md)
 export const CPP_LIBRARY_HEADERS = new Set([
-  "iostream", "string", "vector", "algorithm", "map", "set", "unordered_map", "unordered_set", "queue", "stack",
-  "deque", "list", "utility", "sstream", "fstream", "iomanip", "memory", "functional", "numeric", "array", "tuple",
-  "bits/stdc++.h",
+  "string", "vector", "algorithm", "map", "set", "unordered_map", "unordered_set", "queue", "stack",
+  "deque", "list", "utility", "sstream", "fstream", "memory", "functional", "numeric", "array", "tuple", "stdexcept",
 ]);
+
+/** 지금 쓸 수 있는 C++ 헤더 */
+export const CPP_READY_HEADERS = new Set(["iostream", "iomanip", "ios", "ostream", "istream"]);
+
+/** std:: 안에서 아직 준비 중인 이름과 그 단계 */
+export const STD_LATER = {
+  string: 2, vector: 2, swap: 2, getline: 2, to_string: 2, stoi: 2, stod: 2,
+  map: 5, set: 5, pair: 5, make_pair: 5, sort: 5, reverse: 5, unordered_map: 5, unordered_set: 5, queue: 5,
+  stack: 5, deque: 5, list: 5, array: 5, priority_queue: 5, tuple: 5, find: 5, count: 5, accumulate: 5,
+  runtime_error: 6, exception: 6, logic_error: 6, out_of_range: 6, invalid_argument: 6,
+};
+const STD_TYPES = new Set(["string", "vector", "map", "set", "pair", "unordered_map", "unordered_set", "queue", "stack",
+  "deque", "list", "array", "priority_queue", "tuple"]);
 
 // 아직 준비 중인 C++ 낱말들과 그 단계
 export const CPP_PENDING = {
   class: 3, public: 3, private: 3, protected: 3, this: 3, virtual: 6, friend: 3, operator: 4, explicit: 3, mutable: 3,
-  new: 2, delete: 2, namespace: 2, using: 2, template: 5, typename: 5, try: 6, catch: 6, throw: 6,
+  new: 2, delete: 2, namespace: 2, template: 5, typename: 5, try: 6, catch: 6, throw: 6,
   constexpr: 2, auto: 2, decltype: 5, static_cast: 2, const_cast: 2, reinterpret_cast: 2, dynamic_cast: 6,
 };
 
@@ -346,17 +358,52 @@ function evalCondition(text, line, macros) {
   return v;
 }
 
-/** C++ 모드: 아직 만들지 않은 C++ 기능은 단계와 함께 알려 줘요. */
-function checkCppTokens(tokens) {
-  for (const t of tokens) {
+/**
+ * C++ 모드의 토큰 다듬기.
+ * - std::cout 은 이름 하나("std::cout")로 합쳐요. 맨 앞의 ::f 는 f 예요.
+ * - 'a' 같은 글자 상수는 C++에서 char 타입이에요 (C에서는 int).
+ * - 아직 만들지 않은 C++ 기능은 단계와 함께 알려 줘요.
+ */
+function cppTokens(tokens) {
+  const out = [];
+  let usingStd = false;
+  const later = (t, name) => compileError(t.line, `C++의 std::${name}은 아직 준비 중이에요 (C++ ${STD_LATER[name]}단계)`,
+    "지금은 cout, cin, endl, setw 같은 입출력과 C 방식의 코드를 쓸 수 있어요. 글자 묶음은 char 배열로 써 주세요.");
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    const next = tokens[i + 1];
     if (t.k === "op" && t.v === "::") {
-      throw compileError(t.line, "이름공간(std::)과 :: 는 C++ 2단계에서 지원해요", "지금 C++ 모드에서는 C 방식의 코드를 쓸 수 있어요.");
+      const prev = out[out.length - 1];
+      if (prev && prev.k === "id" && prev.v === "std" && next && next.k === "id") {
+        if (Object.hasOwn(STD_LATER, next.v)) throw later(next, next.v);
+        out[out.length - 1] = { ...prev, v: `std::${next.v}`, raw: `std::${next.v}` };
+        i++;
+        continue;
+      }
+      if (next && next.k === "id" && !(prev && prev.k === "id")) continue; // ::f() 는 전역 f
+      throw compileError(t.line, "이름공간·클래스의 :: 는 C++ 2단계에서 지원해요", "지금은 std::cout 처럼 std:: 만 쓸 수 있어요.");
     }
-    if (t.k === "id" && Object.hasOwn(CPP_PENDING, t.v)) {
-      throw compileError(t.line, `C++의 '${t.v}'는 아직 준비 중이에요 (C++ ${CPP_PENDING[t.v]}단계)`,
-        "지금 C++ 모드에서는 C 방식의 코드에 bool, nullptr, 구조체 이름을 타입으로 쓰기를 더해서 쓸 수 있어요.");
+    if (t.k === "num" && t.isChar && t.value >= -128 && t.value <= 127) {
+      out.push({ ...t, type: T.char });
+      continue;
     }
+    if (t.k === "id") {
+      const prev = out[out.length - 1];
+      if (t.v === "namespace" && prev && prev.k === "id" && prev.v === "using") {
+        if (next && next.k === "id" && next.v === "std") usingStd = true;
+        out.push(t);
+        continue;
+      }
+      if (Object.hasOwn(CPP_PENDING, t.v)) {
+        throw compileError(t.line, `C++의 '${t.v}'는 아직 준비 중이에요 (C++ ${CPP_PENDING[t.v]}단계)`,
+          "지금 C++ 모드에서는 cout, cin과 C 방식의 코드에 bool, nullptr, 구조체 이름을 타입으로 쓰기를 더해서 쓸 수 있어요.");
+      }
+      // using namespace std; 뒤의 string s; vector<int> v; 처럼 아직 없는 타입
+      if (usingStd && STD_TYPES.has(t.v) && next && (next.k === "id" || (next.k === "op" && next.v === "<"))) throw later(t, t.v);
+    }
+    out.push(t);
   }
+  return out;
 }
 
 /** 소스 코드를 전처리하고 토큰 목록을 만들어요. */
@@ -454,7 +501,16 @@ export function tokenize(src, { dialect = "c" } = {}) {
       if (!m) throw compileError(line, "#include 문장이 올바르지 않아요", "예: #include <stdio.h>");
       if (cpp && CPP_LIBRARY_HEADERS.has(m[1])) {
         throw compileError(line, `C++ 표준 라이브러리 <${m[1]}>는 다음 단계에서 지원해요`,
-          "지금 C++ 모드에서는 C 방식(printf, scanf, <cstdio>, <cstring>, <cmath> 등)으로 쓸 수 있어요.");
+          "지금 C++ 모드에서는 <iostream>(cout, cin), <iomanip>와 C 헤더(<cstdio>, <cstring>, <cmath> 등)를 쓸 수 있어요.");
+      }
+      if (cpp && m[1] === "bits/stdc++.h") {
+        // 대회용 '모든 헤더': 지금 있는 것을 모두 넣어요
+        for (const h of [...HEADERS, ...CPP_READY_HEADERS]) includes.add(h);
+        return;
+      }
+      if (cpp && CPP_READY_HEADERS.has(m[1])) {
+        includes.add(m[1] === "iomanip" ? "iomanip" : "iostream");
+        return;
       }
       if (cpp && CPP_C_HEADERS[m[1]]) m[1] = CPP_C_HEADERS[m[1]];
       if (!HEADERS.has(m[1])) {
@@ -583,6 +639,5 @@ export function tokenize(src, { dialect = "c" } = {}) {
     throw compileError(conds[conds.length - 1].line, "#if 가 #endif 로 닫히지 않았어요", "끝에 #endif 를 넣어 주세요.");
   }
   out.push({ k: "eof", v: "<끝>", line: lastLine, col: 1 });
-  if (cpp) checkCppTokens(out);
-  return { tokens: out, includes };
+  return { tokens: cpp ? cppTokens(out) : out, includes };
 }

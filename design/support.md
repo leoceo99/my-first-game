@@ -65,6 +65,17 @@ C는 이 저장소에서 직접 만든 C 실행기(`docs/js/c/`)가 돌려요. �
 | `system()` | 다른 프로그램 실행 | ❌ 아이패드 브라우저에서는 불가능 (안내) |
 | `complex.h`, `wchar.h` | 복소수, 넓은 글자 | ❌ 아직 없음 (안내) |
 
+## C++ (단계별로 만드는 중)
+
+C++은 C 실행기 위에 쌓아요. 순서는 [`cpp-plan.md`](cpp-plan.md)에 있어요.
+
+| 단계 | 내용 | 상태 |
+|---|---|---|
+| 0 | C 방식 코드, `<cstdio>` 같은 헤더, `bool` `nullptr`, 구조체 이름을 바로 타입으로, `void*` 규칙 | ✅ |
+| 1 | `cout` `cin` `cerr`, `endl`, `using namespace std`, `<iomanip>`(`setw` `setprecision` `setfill` `fixed`), `while (cin >> x)`, `cin.get`/`ignore`/`fail`/`clear`, `std::min`/`max` | ✅ |
+| 2 | 참조, 오버로딩, 기본 인자, `new`/`delete`, `auto`, 이름공간, `string`, `vector` | ❌ 준비 중 (단계 안내) |
+| 3–6 | 클래스, 연산자 오버로딩, 템플릿과 STL, 상속·가상 함수·예외 | ❌ 준비 중 (단계 안내) |
+
 ### 진짜 C와 다른 점
 
 - 메모리를 바이트가 아니라 "값 칸"으로 관리해요. 그래서 범위 밖 접근, 해제 후 사용 같은 실수를 정확히 잡지만,

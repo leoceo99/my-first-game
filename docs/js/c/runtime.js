@@ -1482,3 +1482,171 @@ Object.assign(BUILTINS, {
     } },
 });
 delete BUILTINS.getline;
+
+// =====================================================================
+// C++ <iostream>: cout << 값, cin >> 변수
+// =====================================================================
+
+export const OSTREAM = { k: "stream", name: "std::ostream", dir: "out", size: 8 };
+export const ISTREAM = { k: "stream", name: "std::istream", dir: "in", size: 8 };
+/** endl, fixed, setw(3) 같은 조작자의 타입 */
+export const MANIP = { k: "manip", name: "조작자", size: 8 };
+
+/** cout, cin 같은 이름이 가리키는 스트림과 방향 */
+export const STD_STREAMS = {
+  cout: { stream: STDOUT, type: OSTREAM },
+  cerr: { stream: STDERR, type: OSTREAM },
+  clog: { stream: STDERR, type: OSTREAM },
+  cin: { stream: STDIN, type: ISTREAM },
+};
+
+const STREAM_DEFAULTS = {
+  precision: 6, float: null, width: 0, fill: 32, left: false, boolalpha: false, showpoint: false, showpos: false,
+  uppercase: false, base: 10, fail: false, eof: false,
+};
+
+Runtime.prototype.streamState = function streamState(s) {
+  if (!this.streams) this.streams = new Map();
+  let st = this.streams.get(s);
+  if (!st) {
+    st = { ...STREAM_DEFAULTS };
+    this.streams.set(s, st);
+  }
+  return st;
+};
+
+/** 괄호 없이 쓰는 조작자 (<iostream>) */
+export const MANIPULATORS = {
+  endl: (rt, s, st, line) => rt.writeTo(s, [10], line),
+  ends: (rt, s, st, line) => rt.writeTo(s, [0], line),
+  flush: () => {},
+  fixed: (rt, s, st) => { st.float = "fixed"; },
+  scientific: (rt, s, st) => { st.float = "sci"; },
+  defaultfloat: (rt, s, st) => { st.float = null; },
+  left: (rt, s, st) => { st.left = true; },
+  right: (rt, s, st) => { st.left = false; },
+  boolalpha: (rt, s, st) => { st.boolalpha = true; },
+  noboolalpha: (rt, s, st) => { st.boolalpha = false; },
+  showpoint: (rt, s, st) => { st.showpoint = true; },
+  noshowpoint: (rt, s, st) => { st.showpoint = false; },
+  showpos: (rt, s, st) => { st.showpos = true; },
+  noshowpos: (rt, s, st) => { st.showpos = false; },
+  uppercase: (rt, s, st) => { st.uppercase = true; },
+  nouppercase: (rt, s, st) => { st.uppercase = false; },
+  hex: (rt, s, st) => { st.base = 16; },
+  oct: (rt, s, st) => { st.base = 8; },
+  dec: (rt, s, st) => { st.base = 10; },
+};
+
+/** 괄호와 값을 받는 조작자 (<iomanip>) */
+export const MANIP_MAKERS = {
+  setprecision: (n) => (rt, s, st) => { st.precision = Math.max(0, n); },
+  setw: (n) => (rt, s, st) => { st.width = Math.max(0, n); },
+  setfill: (c) => (rt, s, st) => { st.fill = c & 255; },
+};
+
+/** cout << 값: C++의 규칙대로 글자로 바꿔서 내보내요 */
+export function streamPut(rt, s, type, v, line) {
+  const st = rt.streamState(s);
+  if (type.k === "manip") {
+    v(rt, s, st, line);
+    return;
+  }
+  let bytes = null;
+  let text = null;
+  if (isInt(type) && type.isBool) {
+    text = st.boolalpha ? (v ? "true" : "false") : v ? "1" : "0";
+  } else if (isInt(type) && type.bits === 8) {
+    bytes = [v & 255]; // char는 숫자가 아니라 글자로 나와요
+  } else if (isInt(type)) {
+    let n = BigInt(v);
+    if (st.base !== 10) n = BigInt.asUintN(type.bits, n);
+    text = n.toString(st.base);
+    if (st.uppercase) text = text.toUpperCase();
+    if (st.showpos && st.base === 10 && n >= 0n) text = `+${text}`;
+  } else if (isFloat(type)) {
+    const conv = st.float === "fixed" ? "f" : st.float === "sci" ? "e" : "g";
+    const { text: body, negative } = formatFloat(v, st.uppercase ? conv.toUpperCase() : conv, st.precision, st.showpoint);
+    text = `${negative ? "-" : st.showpos ? "+" : ""}${body}`;
+  } else if (isPtr(type)) {
+    if (isCharLike(type.to) && !(v instanceof FnRef)) {
+      if (v === null) {
+        throw runtimeError(line, "NULL인 문자열(char *)을 cout으로 출력하려고 했어요", "진짜 C++에서는 프로그램이 멈추는 실수예요. 문자열이 들어 있는지 확인해 주세요.");
+      }
+      bytes = rt.readCString(v, line);
+    } else if (v instanceof FnRef) text = "1";
+    else text = v === null ? "0" : fakeAddress(v);
+  }
+  if (!bytes) bytes = utf8(text);
+  if (st.width > bytes.length) {
+    const fill = new Array(st.width - bytes.length).fill(st.fill);
+    bytes = st.left ? [...bytes, ...fill] : [...fill, ...bytes];
+  }
+  st.width = 0; // setw는 바로 다음 값 하나에만 쓰여요
+  rt.writeTo(s, bytes, line);
+}
+
+/** cin >> 변수: 공백을 건너뛰고 변수의 타입에 맞는 값 하나를 읽어요. 읽지 못하면 cin이 '실패' 상태가 돼요. */
+export function streamGet(rt, target, type, line) {
+  const st = rt.streamState(STDIN);
+  if (st.fail) return; // 한 번 실패한 cin은 cin.clear() 전까지 아무것도 읽지 않아요
+  const src = rt.reader(STDIN, line);
+  while (isSpace(src.peek())) src.read();
+  if (src.peek() < 0) {
+    st.fail = true;
+    st.eof = true;
+    return;
+  }
+  if (isArr(type)) {
+    const bytes = [];
+    while (src.peek() >= 0 && !isSpace(src.peek())) bytes.push(src.read());
+    rt.writeCString(target, bytes, line);
+    return;
+  }
+  if (isInt(type) && type.bits === 8) {
+    rt.storeAt(target, convert(src.read(), T.int, type), line);
+    return;
+  }
+  const conv = isFloat(type) ? "f" : type.unsigned && !type.isBool ? "u" : "d";
+  const text = scanToken(src, conv, null);
+  if (text === null) {
+    st.fail = true; // 숫자 자리에 글자가 오면 0을 넣고 실패해요 (C++11)
+    rt.storeAt(target, convert(0, T.int, type), line);
+    return;
+  }
+  if (isFloat(type)) {
+    rt.storeAt(target, convert(parseFloat(text), T.double, type), line);
+    return;
+  }
+  let v = parseIntToken(text, conv);
+  if (type.isBool && v !== 0n && v !== 1n) {
+    st.fail = true;
+    v = 0n;
+  }
+  rt.storeAt(target, convert(v, T.llong, type), line);
+}
+
+/** cin.get(): 글자 하나 (공백 포함). 끝이면 EOF(-1) */
+export function streamGetChar(rt, line) {
+  const st = rt.streamState(STDIN);
+  if (st.fail) return -1;
+  const b = rt.reader(STDIN, line).read();
+  if (b < 0) {
+    st.fail = true;
+    st.eof = true;
+    return -1;
+  }
+  return b;
+}
+
+/** cin.ignore(n, 끝글자): 끝글자까지(또는 n글자) 버려요 */
+export function streamIgnore(rt, n, delim, line) {
+  const st = rt.streamState(STDIN);
+  if (st.fail) return;
+  const src = rt.reader(STDIN, line);
+  for (let i = 0; i < n; i++) {
+    const b = src.read();
+    if (b < 0) { st.eof = true; return; }
+    if (b === delim) return;
+  }
+}

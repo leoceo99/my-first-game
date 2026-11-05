@@ -16,10 +16,10 @@ const LANGS = {
     name: "C", ext: "c", mime: "text/x-csrc", engine: "C",
     newCode: "#include <stdio.h>\n\nint main(void) {\n    \n    return 0;\n}\n",
   },
-  // C++: 도입 준비 중이라 새로 만들기 버튼은 아직 숨겨요. .cpp 파일을 가져오면 열 수 있어요 (design/cpp-plan.md)
+  // C++: C 실행기 위에 단계별로 쌓는 중이에요 (design/cpp-plan.md)
   cpp: {
-    name: "C++", ext: "cpp", mime: "text/x-c++src", engine: "C++", hidden: true,
-    newCode: "#include <cstdio>\n\nint main() {\n    \n    return 0;\n}\n",
+    name: "C++", ext: "cpp", mime: "text/x-c++src", engine: "C++",
+    newCode: "#include <iostream>\nusing namespace std;\n\nint main() {\n    \n    return 0;\n}\n",
   },
 };
 const VISIBLE_LANGS = Object.keys(LANGS).filter((lang) => !LANGS[lang].hidden);
@@ -196,10 +196,28 @@ const C_WORD_KEYS = [
   { label: "↶", title: "되돌리기", kind: "tool", run: () => editor.undo() },
 ];
 
+const CPP_SYMBOL_KEYS = C_SYMBOL_KEYS.map((key) => {
+  if (key.label === "%d") return text("<< ");
+  if (key.label === "\\n") return text(">> ");
+  return key;
+});
+
+const CPP_WORD_KEYS = [
+  word("cout", "cout << "), word("cin", "cin >> "), word("endl", "endl"),
+  { gap: true },
+  word("int"), word("double"), word("char"), word("bool"), word("if"), word("else"), word("for"), word("while"),
+  word("return"), word("break", "break;"), word("void"), word("struct"),
+  { label: "#include", kind: "word", run: () => editor.insertText("#include <iostream>\nusing namespace std;\n") },
+  { label: "main", kind: "fn", run: () => editor.insertText("int main() {\n    \n    return 0;\n}\n") },
+  { gap: true },
+  ...INDENT_KEYS,
+  { label: "↶", title: "되돌리기", kind: "tool", run: () => editor.undo() },
+];
+
 const KEYSETS = {
   python: { symbols: PY_SYMBOL_KEYS, words: PY_WORD_KEYS },
   c: { symbols: C_SYMBOL_KEYS, words: C_WORD_KEYS },
-  cpp: { symbols: C_SYMBOL_KEYS, words: C_WORD_KEYS },
+  cpp: { symbols: CPP_SYMBOL_KEYS, words: CPP_WORD_KEYS },
 };
 
 let keyMode = "symbols";

@@ -8,7 +8,7 @@ import { runC } from "./js/c/index.js";
 self.onmessage = (event) => {
   const msg = event.data;
   if (msg.type === "init") {
-    postMessage({ type: "ready", label: "C" });
+    postMessage({ type: "ready", label: msg.lang === "cpp" ? "C++" : "C" });
     return;
   }
   if (msg.type !== "run") return;

@@ -177,7 +177,11 @@ const CPP_KEYWORDS = new Set([
   "explicit", "mutable", "new", "delete", "namespace", "using", "template", "typename", "try", "catch", "throw",
   "constexpr", "decltype", "static_cast", "const_cast", "reinterpret_cast", "dynamic_cast", "override", "final",
 ]);
-const CPP_BUILTINS = new Set(["std", "cout", "cin", "cerr", "endl", "string", "vector", "map", "set", "pair", "make_pair", "sort"]);
+const CPP_BUILTINS = new Set([
+  "std", "cout", "cin", "cerr", "clog", "endl", "fixed", "scientific", "setprecision", "setw", "setfill", "left", "right",
+  "boolalpha", "showpoint", "hex", "dec", "oct", "min", "max",
+  "string", "vector", "map", "set", "pair", "make_pair", "sort",
+]);
 
 export function tokenizeC(src, cpp = false) {
   const tokens = [];

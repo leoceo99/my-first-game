@@ -198,6 +198,25 @@ class Parser {
     return t;
   }
 
+  /** C++: using namespace std;  또는  using std::cout; */
+  usingDecl() {
+    const line = this.next().line;
+    if (this.accept("namespace")) {
+      const tok = this.next();
+      if (tok.k !== "id" || tok.v !== "std") {
+        throw compileError(line, "std 말고 다른 이름공간은 C++ 2단계에서 지원해요", "지금은 using namespace std; 만 쓸 수 있어요.");
+      }
+      this.expect(";");
+      return { k: "using", ns: "std", line };
+    }
+    if (this.cur.k === "id" && this.cur.v.startsWith("std::")) {
+      const name = this.next().v.slice(5);
+      this.expect(";");
+      return { k: "using", name, line };
+    }
+    throw compileError(line, "using은 지금 using namespace std; 와 using std::cout; 처럼만 쓸 수 있어요", "다른 쓰임(using 별명 = 타입;)은 C++ 2단계에서 지원해요.");
+  }
+
   /** C++에서는 struct P { … }; 다음에 P를 바로 타입 이름으로 쓸 수 있어요 */
   cppTagName(tag, t) {
     if (!this.cpp) return;
@@ -370,6 +389,7 @@ class Parser {
     while (this.cur.k !== "eof") {
       const line = this.cur.line;
       if (this.is("_Static_assert")) { items.push(this.staticAssert()); continue; }
+      if (this.cpp && this.is("using")) { items.push(this.usingDecl()); continue; }
       const specs = this.declSpecs();
       if (!specs) {
         if (this.cur.k === "id" && this.is("(", this.peek())) {
@@ -466,6 +486,7 @@ class Parser {
     const tok = this.cur;
     const line = tok.line;
     if (this.is("{")) return this.block();
+    if (this.cpp && this.is("using")) return this.usingDecl();
     if (tok.k === "id") {
       switch (tok.v) {
         case "if": {

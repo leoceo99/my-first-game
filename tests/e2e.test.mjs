@@ -374,3 +374,29 @@ test("파이썬 asyncio·sys.stdin, 파이썬이 만든 파일을 C가 읽고, .
   assert.deepEqual(errors, []);
   await context.close();
 });
+
+test("C++: 새 C++ 코드 버튼, 예제의 cin/cout 대화, 입력 끝, C++ 키 바", { skip: !haveEngine }, async () => {
+  const { context, page, errors } = await openApp({ serviceWorkers: "block" });
+  await page.click("#btn-drawer");
+  await page.click(".example-list button:has-text('C++ 평균 계산기')");
+  await page.waitForFunction(() => window.pybridge.engine.lang === "cpp" && window.pybridge.engine.state === "ready", null, { timeout: 10000 });
+  assert.equal(await page.locator("#lang-badge").innerText(), "C++");
+  await page.click("#btn-run");
+  await answer(page, "90");
+  await answer(page, "80");
+  await waitAsk(page);
+  await page.click("#btn-eof");
+  await waitIdle(page);
+  const out = await consoleText(page);
+  assert.match(out, / 1번째: 90점[\s\S]* 2번째: 80점[\s\S]*평균: 85\.0점 \(2명\)/);
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/9-cpp.png` });
+
+  await page.click("#btn-drawer");
+  await page.click("#btn-new-cpp");
+  assert.match(await page.evaluate(() => window.pybridge.editor.value), /#include <iostream>\nusing namespace std;/);
+  // C++ 키 바에는 << 와 >> 키가 있어요
+  assert.equal(await page.locator(".keybar .key:text-is('<<')").count(), 1);
+  assert.equal(await page.locator(".keybar .key:text-is('>>')").count(), 1);
+  assert.deepEqual(errors, []);
+  await context.close();
+});

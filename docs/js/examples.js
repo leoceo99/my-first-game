@@ -1,4 +1,4 @@
-// 처음 시작할 때와 '예제' 목록에 나오는 코드들. lang: "python" 또는 "c"
+// 처음 시작할 때와 '예제' 목록에 나오는 코드들. lang: "python", "c", "cpp"
 
 export const EXAMPLES = [
   {
@@ -344,6 +344,57 @@ int main(void) {
         printf("%d. %s", count, line);
     }
     fclose(fp);
+    return 0;
+}
+`,
+  },
+  {
+    lang: "cpp",
+    name: "C++ 인사하기",
+    about: "cout으로 출력하고 cin으로 입력받기",
+    code: `#include <iostream>
+using namespace std;
+
+int main() {
+    char name[30];
+    int age;
+
+    cout << "이름이 뭐예요? ";
+    cin >> name;
+    cout << "몇 살이에요? ";
+    cin >> age;
+
+    cout << "반가워요, " << name << "님!" << endl;
+    cout << "10년 뒤에는 " << age + 10 << "살이 되겠네요." << endl;
+    return 0;
+}
+`,
+  },
+  {
+    lang: "cpp",
+    name: "C++ 평균 계산기",
+    about: "while (cin >> x), fixed, setprecision, setw",
+    code: `#include <iostream>
+#include <iomanip>
+using namespace std;
+
+int main() {
+    cout << "점수를 하나씩 입력하고, 다 넣었으면 [입력 끝]을 누르세요." << endl;
+
+    double score, sum = 0;
+    int count = 0;
+    while (cin >> score) {
+        count++;
+        sum += score;
+        cout << setw(2) << count << "번째: " << score << "점" << endl;
+    }
+
+    if (count == 0) {
+        cout << "입력한 점수가 없어요." << endl;
+        return 0;
+    }
+    cout << fixed << setprecision(1);
+    cout << "평균: " << sum / count << "점 (" << count << "명)" << endl;
     return 0;
 }
 `,
