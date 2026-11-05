@@ -7,6 +7,9 @@ import { Runtime, NEED_INPUT, ExitSignal } from "./runtime.js";
 import { CError, runtimeError, typeName, isInt, isFloat, isArr, isPtr, isCharLike, isStruct } from "./types.js";
 
 function kindOf(t) {
+  if (t.k === "string") return "str";
+  if (t.k === "vector") return "list";
+  if (t.k === "ref") return kindOf(t.to);
   if (isStruct(t)) return "struct";
   if (isArr(t)) return isCharLike(t.of) ? "str" : "list";
   if (isPtr(t)) return isCharLike(t.to) ? "str" : "ptr";

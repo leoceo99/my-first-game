@@ -45,9 +45,12 @@ C11 표준 문법과 표준 라이브러리를 하나하나 확인했어요. 자
 ### C++ (단계별로 만드는 중)
 
 C 실행기 위에 C++을 단계별로 쌓고 있어요. **새 C++ 코드** 버튼이나 `.cpp` 파일로 시작해요.
-지금은 `cout` `cin`, `using namespace std;`, `<iomanip>`(`setw` `setprecision` `fixed`), `while (cin >> x)`,
-`bool` `nullptr`, 구조체 이름을 바로 타입으로 쓰기와 C 방식의 코드가 돼요.
-`string`, `vector`, 클래스, 템플릿 같은 나머지는 [`design/cpp-plan.md`](design/cpp-plan.md)의 순서대로 만들어요.
+지금 되는 것:
+- 입출력: `cout` `cin` `getline`, `<iomanip>`(`setw` `setprecision` `fixed`), `while (cin >> x)`
+- 언어: 참조(`int &r`), 오버로딩, 기본 인자, `new`/`delete`, `auto`, `constexpr`, `static_cast`, 범위 기반 `for`, 이름공간
+- 라이브러리: **`std::string`**(`+`, `substr`, `find` …), **`std::vector`**(`push_back`, `vector<vector<int>>` …), `to_string`, `stoi`
+
+클래스, 템플릿, 예외 같은 나머지는 [`design/cpp-plan.md`](design/cpp-plan.md)의 순서대로 만들어요.
 
 ### 이 앱만의 특징
 

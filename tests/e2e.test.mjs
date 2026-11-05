@@ -400,3 +400,24 @@ test("C++: 새 C++ 코드 버튼, 예제의 cin/cout 대화, 입력 끝, C++ 키
   assert.deepEqual(errors, []);
   await context.close();
 });
+
+test("C++: string과 vector 예제 (getline, 입력 끝), 변수 탭", { skip: !haveEngine }, async () => {
+  const { context, page, errors } = await openApp({ serviceWorkers: "block" });
+  await page.click("#btn-drawer");
+  await page.click(".example-list button:has-text('C++ 할 일 목록')");
+  await page.waitForFunction(() => window.pybridge.engine.lang === "cpp" && window.pybridge.engine.state === "ready", null, { timeout: 10000 });
+  await page.click("#btn-run");
+  await answer(page, "우유 사기");
+  await answer(page, "숙제 끝내기");
+  await waitAsk(page);
+  await page.click("#btn-eof");
+  await waitIdle(page);
+  assert.match(await consoleText(page), /할 일 2개[\s\S]*1\. 우유 사기[\s\S]*2\. 숙제 끝내기[\s\S]*가장 긴 할 일: 숙제 끝내기/);
+  await page.click("#tab-vars");
+  const vars = await page.locator("#vars").innerText();
+  assert.match(vars, /vector<string>/);
+  assert.match(vars, /"우유 사기", "숙제 끝내기"/);
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/10-cpp-vector.png` });
+  assert.deepEqual(errors, []);
+  await context.close();
+});

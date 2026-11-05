@@ -33,6 +33,8 @@ class Parser {
     this.includes = includes;
     this.cpp = dialect === "cpp";
     this.ns = []; // 지금 들어가 있는 이름공간들
+    this.usingStd = false; // using namespace std; 뒤인가요?
+    this.usingNames = new Set();
     this.tags = new Map(); // struct 이름들
     this.typedefs = [new Map()]; // typedef 이름들 (블록마다 한 층)
     // 헤더가 미리 만들어 둔 타입 이름들
@@ -104,7 +106,36 @@ class Parser {
 
   isTypeStart(tok = this.cur) {
     if (tok.k !== "id") return false;
-    return BASE_WORDS.has(tok.v) || QUALIFIERS.has(tok.v) || STORAGE.has(tok.v) || TAG_WORDS.has(tok.v) || this.isTypedefName(tok.v);
+    return BASE_WORDS.has(tok.v) || QUALIFIERS.has(tok.v) || STORAGE.has(tok.v) || TAG_WORDS.has(tok.v) || this.isTypedefName(tok.v) ||
+      (this.cpp && (tok.v === "auto" || tok.v === "constexpr" || this.stdTypeName(tok) !== null));
+  }
+
+  /** std::string, std::vector (using namespace std; 뒤라면 string, vector) */
+  stdTypeName(tok = this.cur) {
+    if (!this.cpp || tok.k !== "id") return null;
+    const base = tok.v.startsWith("std::") ? tok.v.slice(5) : (this.usingStd || this.usingNames.has(tok.v)) ? tok.v : null;
+    return base === "string" || base === "vector" ? base : null;
+  }
+
+  /** string / vector<타입> */
+  objType() {
+    const tok = this.next();
+    const kind = this.stdTypeName(tok);
+    if (kind === "string") return { k: "string", line: tok.line };
+    this.expect("<", "예: vector<int> v;");
+    const of = this.typeName();
+    this.closeAngle();
+    return { k: "vector", of, line: tok.line };
+  }
+
+  /** 템플릿의 닫는 > (vector<vector<int>> 의 >> 는 > 두 개로 나눠요) */
+  closeAngle() {
+    if (this.accept(">")) return;
+    if (this.is(">>")) {
+      this.t[this.i] = { ...this.cur, v: ">", raw: ">" };
+      return;
+    }
+    throw compileError(this.cur.line, "< 를 > 로 닫아 주세요", "예: vector<int>");
   }
 
   // ---------- 타입 ----------
@@ -139,6 +170,9 @@ class Parser {
         const def = this.enumSpec();
         if (def) enums.push(def);
         named = T.int;
+        continue;
+      } else if (!named && words.length === 0 && this.stdTypeName(this.cur) !== null) {
+        named = this.objType();
         continue;
       } else if (!named && words.length === 0 && this.isTypedefName(v)) {
         named = this.typedefType(v);
@@ -230,10 +264,12 @@ class Parser {
       const tok = this.next();
       if (tok.k !== "id") throw compileError(line, "using namespace 뒤에는 이름공간 이름이 와요", "예: using namespace std;");
       this.expect(";");
+      if (tok.v === "std") this.usingStd = true;
       return { k: "using", ns: tok.v, line };
     }
     if (this.cur.k === "id" && this.cur.v.startsWith("std::")) {
       const name = this.next().v.slice(5);
+      this.usingNames.add(name);
       this.expect(";");
       return { k: "using", name, line };
     }
@@ -357,6 +393,9 @@ class Parser {
           this.expect("]");
         }
       } else if (this.is("(") && (name !== null || inner !== null || abstract)) {
+        // C++: vector<int> v(5); int x(3); 처럼 괄호 안이 타입이 아니면 처음 값이에요
+        const after = this.peek();
+        if (this.cpp && !abstract && name !== null && !this.is(")", after) && !this.isTypeStart(after) && !this.is("...", after)) break;
         suffixes.push({ func: this.params() });
       } else break;
     }
@@ -463,6 +502,15 @@ class Parser {
       } else {
         let init = null;
         if (this.accept("=")) init = this.initializer();
+        else if (this.cpp && this.is("(")) {
+          const line = this.next().line;
+          const args = [];
+          if (!this.is(")")) {
+            do args.push(this.is("{") ? this.initializer() : this.assignment()); while (this.accept(","));
+          }
+          this.expect(")");
+          init = { k: "ctor", args, line };
+        } else if (this.cpp && this.is("{")) init = this.initializer();
         items.push({ ...d, init, storage: specs.storage });
       }
       if (!this.accept(",")) break;
@@ -748,7 +796,7 @@ class Parser {
       } else if (this.accept("(")) {
         const args = [];
         if (!this.is(")")) {
-          do args.push(this.assignment()); while (this.accept(","));
+          do args.push(this.cpp && this.is("{") ? this.initializer() : this.assignment()); while (this.accept(","));
         }
         this.expect(")", "함수 호출의 괄호를 닫아 주세요.");
         e = { k: "call", callee: e, args, line: tok.line };
@@ -824,6 +872,24 @@ class Parser {
 
   primary() {
     const tok = this.cur;
+    if (this.cpp && this.stdTypeName(tok) !== null && !this.is("::", this.peek())) {
+      // string("abc"), vector<int>(3, 0), vector<int>{1, 2}
+      const type = this.objType();
+      if (this.is("{")) return { k: "construct", type, list: this.initializer(), line: tok.line };
+      this.expect("(", `예: ${type.k === "string" ? "string(\"abc\")" : "vector<int>(3, 0)"}`);
+      const args = [];
+      if (!this.is(")")) {
+        do args.push(this.is("{") ? this.initializer() : this.assignment()); while (this.accept(","));
+      }
+      this.expect(")");
+      return { k: "construct", type, args, line: tok.line };
+    }
+    if (this.cpp && tok.k === "id" && this.isTypedefName(tok.v) && this.is("{", this.peek())) {
+      // Point{1, 2}: 이름 없는 구조체 값
+      this.next();
+      const type = this.typedefType(tok.v);
+      return { k: "compound", type, init: this.initializer(), line: tok.line };
+    }
     if (this.cpp && tok.k === "id" && ["static_cast", "const_cast", "reinterpret_cast"].includes(tok.v)) {
       // static_cast<double>(x) 는 (double)(x) 와 같아요
       this.next();

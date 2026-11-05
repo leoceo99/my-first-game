@@ -179,7 +179,7 @@ const CPP_KEYWORDS = new Set([
 ]);
 const CPP_BUILTINS = new Set([
   "std", "cout", "cin", "cerr", "clog", "endl", "fixed", "scientific", "setprecision", "setw", "setfill", "left", "right",
-  "boolalpha", "showpoint", "hex", "dec", "oct", "min", "max",
+  "boolalpha", "showpoint", "hex", "dec", "oct", "min", "max", "swap", "getline", "to_string", "stoi", "stod", "npos",
   "string", "vector", "map", "set", "pair", "make_pair", "sort",
 ]);
 

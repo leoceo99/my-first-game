@@ -50,6 +50,26 @@ export const isScalar = (t) => isArith(t) || isPtr(t);
 export const is64 = (t) => t.k === "int" && t.bits === 64;
 export const isVoid = (t) => t.k === "void";
 export const isStruct = (t) => t.k === "struct";
+
+// ---------- C++ std::string, std::vector ----------
+/** 값 하나가 '물건'(Store)인 C++ 타입: 복사할 때 통째로 새로 만들어요 */
+export const STRING_T = { k: "string", name: "string", size: 32, align: 8 };
+export const vectorOf = (of) => ({ k: "vector", of, name: "vector", size: 24, align: 8 });
+export const isObj = (t) => t.k === "string" || t.k === "vector";
+
+/** 이 타입 안에 string/vector가 들어 있나요? (복사할 때 깊게 복사해야 해요) */
+export function hasObj(t) {
+  if (isObj(t)) return true;
+  if (isArr(t)) return hasObj(t.of);
+  if (isStruct(t)) {
+    if (t.objMemo === undefined) {
+      t.objMemo = false;
+      t.objMemo = (t.fields || []).some((f) => hasObj(f.type));
+    }
+    return t.objMemo;
+  }
+  return false;
+}
 export const isFunc = (t) => t.k === "func";
 export const isFuncPtr = (t) => t.k === "ptr" && t.to.k === "func";
 export const isCharLike = (t) => t.k === "int" && t.bits === 8;
@@ -67,6 +87,7 @@ export function cells(t) {
 export function alignOf(t) {
   if (isArr(t)) return alignOf(t.of);
   if (isStruct(t)) return t.align;
+  if (isObj(t)) return 8;
   return Math.max(1, t.size || 1);
 }
 
@@ -106,6 +127,8 @@ export function sameType(a, b) {
   }
   if (a.k === "int" || a.k === "float") return a.name === b.name && a.bits === b.bits;
   if (a.k === "ptr" || a.k === "ref") return sameType(a.to, b.to);
+  if (a.k === "string") return true;
+  if (a.k === "vector") return sameType(a.of, b.of);
   if (a.k === "array") {
     // 크기가 실행 중에 정해지는 배열(VLA)은 어떤 크기와도 맞다고 봐요
     const flexible = a.vla || b.vla || a.anyLen || b.anyLen;
@@ -129,6 +152,7 @@ export function typeName(t) {
     }
     case "func": return `${typeName(t.ret)} (${t.params.map((p) => typeName(p.type)).join(", ")})`;
     case "ref": return `${t.toConst ? "const " : ""}${typeName(t.to)} &`;
+    case "vector": return `vector<${typeName(t.of)}>`;
     case "struct": return t.alias || `${t.isUnion ? "union" : "struct"} ${t.tag || "(이름 없음)"}`;
     default: return t.name;
   }
@@ -141,6 +165,8 @@ export function friendlyType(t) {
   if (isFuncPtr(t)) return `함수 포인터(${typeName(t)})`;
   if (isPtr(t)) return isCharLike(t.to) ? "문자열(char *)" : `주소(${typeName(t)})`;
   if (isStruct(t)) return `구조체(${typeName(t)})`;
+  if (t.k === "string") return "문자열(string)";
+  if (t.k === "vector") return `${typeName(t)}`;
   if (isArr(t)) return `배열(${typeName(t)})`;
   return t.name;
 }
@@ -211,6 +237,7 @@ export function convert(v, from, to) {
 }
 
 export function zeroOf(t) {
+  if (isObj(t)) return null; // 비어 있는 string/vector (처음 바꿀 때 만들어요)
   if (is64(t)) return 0n;
   if (isPtr(t)) return null;
   return 0;

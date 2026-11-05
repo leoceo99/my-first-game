@@ -15,22 +15,20 @@ export const CPP_C_HEADERS = {
 };
 
 // C++ 표준 라이브러리 헤더: C++ 도입 단계에서 하나씩 만들 예정이에요 (design/cpp-plan.md)
-export const CPP_LIBRARY_HEADERS = new Set([
-  "string", "vector", "algorithm", "map", "set", "unordered_map", "unordered_set", "queue", "stack",
+export const CPP_LIBRARY_HEADERS = new Set([ "algorithm", "map", "set", "unordered_map", "unordered_set", "queue", "stack",
   "deque", "list", "utility", "sstream", "fstream", "memory", "functional", "numeric", "array", "tuple", "stdexcept",
 ]);
 
 /** 지금 쓸 수 있는 C++ 헤더 */
-export const CPP_READY_HEADERS = new Set(["iostream", "iomanip", "ios", "ostream", "istream"]);
+export const CPP_READY_HEADERS = new Set(["iostream", "iomanip", "ios", "ostream", "istream", "string", "vector"]);
 
 /** std:: 안에서 아직 준비 중인 이름과 그 단계 */
 export const STD_LATER = {
-  string: 2, vector: 2, getline: 2, to_string: 2, stoi: 2, stod: 2,
   map: 5, set: 5, pair: 5, make_pair: 5, sort: 5, reverse: 5, unordered_map: 5, unordered_set: 5, queue: 5,
   stack: 5, deque: 5, list: 5, array: 5, priority_queue: 5, tuple: 5, find: 5, count: 5, accumulate: 5,
   runtime_error: 6, exception: 6, logic_error: 6, out_of_range: 6, invalid_argument: 6,
 };
-const STD_TYPES = new Set(["string", "vector", "map", "set", "pair", "unordered_map", "unordered_set", "queue", "stack",
+const STD_TYPES = new Set(["map", "set", "pair", "unordered_map", "unordered_set", "queue", "stack",
   "deque", "list", "array", "priority_queue", "tuple"]);
 
 // 아직 준비 중인 C++ 낱말들과 그 단계
@@ -514,7 +512,7 @@ export function tokenize(src, { dialect = "c" } = {}) {
         return;
       }
       if (cpp && CPP_READY_HEADERS.has(m[1])) {
-        includes.add(m[1] === "iomanip" ? "iomanip" : "iostream");
+        includes.add(["iomanip", "string", "vector"].includes(m[1]) ? m[1] : "iostream");
         return;
       }
       if (cpp && CPP_C_HEADERS[m[1]]) m[1] = CPP_C_HEADERS[m[1]];

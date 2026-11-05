@@ -72,7 +72,8 @@ test("C++ 모드: void*를 그냥 넣으면 C++ 규칙대로 알려요", () => {
 
 test("C++ 모드: 아직 없는 기능은 단계와 함께 안내해요", () => {
   const cases = [
-    ["#include <vector>\nint main() {}", /<vector>.*다음 단계/],
+    ["#include <map>\nint main() {}", /<map>.*다음 단계/],
+    ["#include <iostream>\nusing namespace std;\nint main() { map<int, int> m; }", /std::map.*5단계/],
     ["int main() { class A {}; }", /'class'.*3단계/],
     ["int main() { template <typename T> int x; }", /'template'.*5단계/],
     ["int main() { try { } catch (int e) { } }", /'try'.*6단계/],
@@ -210,19 +211,56 @@ for (const [name, code, want, inputs] of STAGE2A) {
   });
 }
 
+
+// ---------- 2단계 (뒷부분): std::string, std::vector ----------
+const H2B = "#include <iostream>\n#include <string>\n#include <vector>\nusing namespace std;\n";
+const STAGE2B = [
+  ["string 기본", H2B + 'int main() { string s = "안녕"; string t("하세요"); string u = s + t + "!"; cout << u << " " << u.size() << endl; }', "안녕하세요! 16\n"],
+  ["string 비교", H2B + 'int main() { string a = "apple", b = "banana"; cout << (a < b) << (a == "apple") << ("apple" != a) << (b >= a) << endl; }', "1101\n"],
+  ["string 인덱스와 바꾸기", H2B + 'int main() { string s = "cat"; s[0] = \'b\'; s += \'s\'; s += "!"; s.push_back(\'?\'); cout << s << s.length() << s[1] << endl; }', "bats!?6a\n"],
+  ["string 복사는 따로", H2B + 'int main() { string a = "x"; string b = a; b += "y"; cout << a << b << endl; }', "xxy\n"],
+  ["string 함수", H2B + 'int main() { string s = "hello world"; cout << s.substr(6) << "|" << s.substr(0, 5) << "|" << s.find("o") << "|" << s.rfind("o") << "|" << (s.find("z") == string::npos) << endl; s.erase(5, 6); s.insert(0, ">> "); s.replace(3, 1, "H"); cout << s << endl; }', "world|hello|4|7|1\n>> Hello\n"],
+  ["cin >> string, getline", H2B + 'int main() { string name, line; cin >> name; getline(cin, line); getline(cin, line); cout << name << "/" << line << endl; }', "민지/좋은 하루\n", ["민지", "좋은 하루"]],
+  ["while getline", H2B + 'int main() { string line; int n = 0; while (getline(cin, line)) n += line.size(); cout << n << endl; }', "5\n", ["ab", "cde", null]],
+  ["to_string, stoi, stod", H2B + 'int main() { string s = to_string(42) + "+" + to_string(1.5); int x = stoi("12") + 1; double d = stod("2.5"); cout << s << " " << x << " " << d * 2 << endl; }', "42+1.500000 13 5\n"],
+  ["c_str과 printf", "#include <iostream>\n#include <cstdio>\n#include <cstring>\nusing namespace std;\nint main() { string s = \"abc\"; printf(\"%s %zu\\n\", s.c_str(), strlen(s.c_str())); }", "abc 3\n"],
+  ["string 범위 for", H2B + 'int main() { string s = "abc"; for (char c : s) cout << c << \'-\'; for (char &c : s) c = c - 32; cout << s << endl; }', "a-b-c-ABC\n"],
+  ["string 함수 인자, 참조", H2B + 'string shout(string s) { s += "!"; return s; }\nvoid add(string &s) { s += "?"; }\nint count(const string &s) { return s.size(); }\nint main() { string a = "hi"; string b = shout(a); add(a); cout << a << b << count("xyz") << endl; }', "hi?hi!3\n"],
+  ["string 범위 밖", H2B + 'int main() { string s = "ab"; cout << s[5]; }', "ERR"],
+  ["string + 숫자 오류", H2B + 'int main() { string s = "a"; s = s + 1; }', "ERR"],
+  ["vector 기본", H2B + 'int main() { vector<int> v; v.push_back(3); v.push_back(1); v.push_back(2); cout << v.size() << v[0] << v.back() << v.front() << endl; }', "3323\n"],
+  ["vector 초기화들", H2B + 'int main() { vector<int> a = {1, 2, 3}; vector<int> b(3); vector<int> c(2, 7); vector<int> d{4, 5}; cout << a[2] << b[1] << c[1] << d.size() << endl; }', "3072\n"],
+  ["vector 반복", H2B + 'int main() { vector<int> v = {1, 2, 3}; int s = 0; for (int i = 0; i < v.size(); i++) s += v[i]; for (int &x : v) x *= 10; for (auto x : v) cout << x << " "; cout << s << endl; }', "10 20 30 6\n"],
+  ["vector 복사는 따로", H2B + 'int main() { vector<int> a = {1}; vector<int> b = a; b.push_back(2); b[0] = 9; cout << a.size() << a[0] << b.size() << b[0] << endl; }', "1129\n"],
+  ["vector 함수 인자", H2B + 'int sum(const vector<int> &v) { int s = 0; for (int x : v) s += x; return s; }\nvoid fill(vector<int> &v, int n) { for (int i = 0; i < n; i++) v.push_back(i); }\nvector<int> twice(vector<int> v) { for (int &x : v) x *= 2; return v; }\nint main() { vector<int> v; fill(v, 4); vector<int> w = twice(v); cout << sum(v) << " " << sum(w) << endl; }', "6 12\n"],
+  ["vector 2차원", H2B + 'int main() { int n = 2, m = 3; vector<vector<int>> g(n, vector<int>(m, 0)); g[1][2] = 5; g[0].push_back(1); cout << g.size() << g[0].size() << g[1][2] << endl; }', "245\n"],
+  ["vector<string>", H2B + 'int main() { vector<string> names = {"민지", "철수"}; names.push_back("영희"); for (const auto &n : names) cout << n << " "; cout << names[1].size() << endl; }', "민지 철수 영희 6\n"],
+  ["vector 구조체", H2B + 'struct P { int x, y; };\nint main() { vector<P> ps; ps.push_back({1, 2}); ps.push_back(P{3, 4}); ps[1].x += 10; for (auto &p : ps) cout << p.x << "," << p.y << " "; cout << endl; }', "1,2 13,4 \n"],
+  ["구조체 안 string", H2B + 'struct Student { string name; int score; };\nint main() { Student a = {"민지", 90}; Student b = a; b.name += "!"; vector<Student> all = {a, b}; for (auto &s : all) cout << s.name << s.score << " "; cout << endl; }', "민지90 민지!90 \n"],
+  ["vector pop/insert/erase/clear", H2B + 'int main() { vector<int> v = {1, 2, 3, 4}; v.pop_back(); v.insert(v.begin() + 1, 9); v.erase(v.begin()); for (int x : v) cout << x; v.clear(); cout << " " << v.empty() << endl; }', "923 1\n"],
+  ["vector resize, at", H2B + 'int main() { vector<int> v(2, 1); v.resize(4); v.resize(5, 7); cout << v.size() << v[1] << v[2] << v.at(4) << endl; }', "5107\n"],
+  ["vector 범위 밖", H2B + 'int main() { vector<int> v(3); v[3] = 1; }', "ERR"],
+  ["빈 vector back", H2B + 'int main() { vector<int> v; cout << v.back(); }', "ERR"],
+  ["vector 반복자", H2B + 'int main() { vector<int> v = {5, 6, 7}; for (auto it = v.begin(); it != v.end(); ++it) cout << *it; cout << " " << v.end() - v.begin() << endl; }', "567 3\n"],
+  ["vector cin 읽기", H2B + 'int main() { int n; cin >> n; vector<int> v(n); for (int i = 0; i < n; i++) cin >> v[i]; int best = v[0]; for (int x : v) best = max(best, x); cout << best << endl; }', "9\n", ["3", "4 9 2"]],
+  ["vector 같음 비교", H2B + 'int main() { vector<int> a = {1, 2}, b = {1, 2}; cout << (a == b); b.push_back(3); cout << (a != b) << endl; }', "11\n"],
+  ["vector 헤더 없음", "#include <iostream>\nusing namespace std;\nint main() { vector<int> v; }", "ERR"],
+  ["cout << vector 오류", H2B + "int main() { vector<int> v; cout << v; }", "ERR"],
+  ["auto와 string", H2B + 'int main() { auto s = string("ab") + "c"; auto n = s.size(); cout << s << n << endl; }', "abc3\n"],
+  ["std:: 붙인 string/vector", '#include <iostream>\n#include <string>\n#include <vector>\nint main() { std::vector<std::string> v = {"a"}; std::string s = v[0] + "b"; std::cout << s << std::endl; }', "ab\n"],
+  ["string 배열", H2B + 'int main() { string names[3] = {"a", "b"}; names[2] = "c"; for (string &n : names) cout << n; cout << names[1].size() << endl; }', "abc1\n"],
+  ["new/delete와 string, vector 목표", H2B + 'int main() {\n    int *p = new int(7);\n    std::vector<std::string> names = {"민지", "철수"};\n    names.push_back("영희");\n    for (const auto &n : names) std::cout << n << " ";\n    std::cout << *p << "\\n";\n    delete p;\n}', "민지 철수 영희 7\n"],
+];
+for (const [name, code, want, inputs] of STAGE2B) {
+  test(`C++ 2단계: ${name}`, () => {
+    const r = run(code, inputs);
+    if (want === "ERR") assert.equal(r.status, "error", r.out);
+    else ok(code, want, inputs);
+  });
+}
+
 // ---------- 앞으로의 단계: 목표 프로그램 ----------
 const TODO = [
-  [2, "new/delete와 string, vector", `#include <iostream>
-#include <string>
-#include <vector>
-int main() {
-    int *p = new int(7);
-    std::vector<std::string> names = {"민지", "철수"};
-    names.push_back("영희");
-    for (const auto &n : names) std::cout << n << " ";
-    std::cout << *p << "\\n";
-    delete p;
-}`, "민지 철수 영희 7\n"],
   [3, "클래스, 생성자, 소멸자", `#include <iostream>
 class Counter {
     int count;

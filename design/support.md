@@ -73,7 +73,7 @@ C++은 C 실행기 위에 쌓아요. 순서는 [`cpp-plan.md`](cpp-plan.md)에 �
 |---|---|---|
 | 0 | C 방식 코드, `<cstdio>` 같은 헤더, `bool` `nullptr`, 구조체 이름을 바로 타입으로, `void*` 규칙 | ✅ |
 | 1 | `cout` `cin` `cerr`, `endl`, `using namespace std`, `<iomanip>`(`setw` `setprecision` `setfill` `fixed`), `while (cin >> x)`, `cin.get`/`ignore`/`fail`/`clear`, `std::min`/`max` | ✅ |
-| 2 | 참조, 오버로딩, 기본 인자, `new`/`delete`, `auto`, 이름공간, `string`, `vector` | ❌ 준비 중 (단계 안내) |
+| 2 | 참조, 오버로딩, 기본 인자, `new`/`delete`, `auto`, `constexpr`, 캐스트, 범위 기반 `for`, 이름공간, `std::string`, `std::vector`, `getline`, `to_string`/`stoi` | ✅ |
 | 3–6 | 클래스, 연산자 오버로딩, 템플릿과 STL, 상속·가상 함수·예외 | ❌ 준비 중 (단계 안내) |
 
 ### 진짜 C와 다른 점

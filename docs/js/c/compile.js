@@ -3,11 +3,13 @@
 import {
   T, Ptr, Store, FnRef, CError, ptr, arr, func, compileError, runtimeError, convert, zeroOf, zerosOf, truthy, cells, baseOf,
   alignOf, utf8, isInt, isFloat, isArith, isPtr, isArr, isScalar, is64, isVoid, isCharLike, isStruct, isFunc, isFuncPtr,
-  sameType, common, promote, typeName, friendlyType,
+  sameType, common, promote, typeName, friendlyType, STRING_T, vectorOf, isObj, hasObj,
 } from "./types.js";
 import {
   BUILTINS, FILE_T, STDIN, STDOUT, STDERR, JumpSignal, parseFormat, retypeHeap,
   MANIP, STD_STREAMS, MANIPULATORS, MANIP_MAKERS, streamPut, streamGet, streamGetChar, streamIgnore,
+  NPOS, newString, strBytes, strLen, setStr, newVector, vecLen, vecResized, cloneValue, cloneCells, strCompare,
+  streamGetWord, streamGetLine, toStringBytes, parseNumber,
 } from "./runtime.js";
 import { CPP_C_HEADERS, STD_LATER } from "./lexer.js";
 
@@ -18,6 +20,8 @@ const RETURN = 3;
 const GOTO = 4;
 const MAX_DEPTH = 2500;
 const NULL_HEADERS = ["stdio.h", "stdlib.h", "string.h", "stddef.h", "time.h"];
+/** string과 함께 쓰는 std 함수들 */
+const STR_FUNCS = new Set(["getline", "to_string", "stoi", "stol", "stoll", "stod", "stof"]);
 
 function editDistance(a, b) {
   const d = Array.from({ length: a.length + 1 }, (_, i) => [i]);
@@ -283,6 +287,7 @@ export class Compiler {
   /** cout, cin, endl, fixed … 같은 std 이름을 식으로 만들어요. 해당하지 않으면 null */
   stdIdentifier(name, line) {
     const base = name.startsWith("std::") ? name.slice(5) : name;
+    if (base === "string::npos") return { t: T.ulong, ev: () => NPOS, cv: NPOS };
     const known = STD_STREAMS[base] || MANIPULATORS[base] || MANIP_MAKERS[base];
     if (!known) {
       if (name.startsWith("std::") && !BUILTINS[base]) {
@@ -360,6 +365,10 @@ export class Compiler {
   pickOverload(group, args, node, name) {
     const { line } = node;
     const rank = (E, to) => {
+      if (E.initlist) {
+        const target = to.k === "ref" ? to.to : to;
+        return isStruct(target) || isObj(target) ? 2 : Infinity;
+      }
       if (to.k === "ref") {
         if (E.lv && !E.bitfield && sameType(E.t, to.to) && !(E.isConst && !to.toConst)) return 0;
         if (!to.toConst) return Infinity;
@@ -475,17 +484,32 @@ export class Compiler {
     const rt = this.rt;
     this.push();
     const R = this.expr(node.range);
-    if (!isArr(R.t) || !R.lv) {
-      throw compileError(line, "범위 기반 for의 : 뒤에는 배열이 와야 해요", `${friendlyType(R.t)}는 하나씩 꺼낼 수 없어요.`);
+    let elem;
+    let stride;
+    let count;
+    let baseOf;
+    if (this.cpp && isObj(R.t)) {
+      // string은 글자 하나씩, vector는 원소 하나씩
+      const S = this.objRef(R, line);
+      elem = R.t.k === "string" ? T.char : R.t.of;
+      stride = cells(elem);
+      let obj = null;
+      baseOf = (f) => { obj = S(f); return new Ptr(obj, 0); };
+      count = () => (R.t.k === "string" ? strLen(obj) : vecLen(obj));
+    } else {
+      if (!isArr(R.t) || !R.lv) {
+        throw compileError(line, "범위 기반 for의 : 뒤에는 배열, string, vector가 와야 해요", `${friendlyType(R.t)}는 하나씩 꺼낼 수 없어요.`);
+      }
+      elem = this.need(R.t.of, line);
+      stride = cellsDyn(elem);
+      if (typeof stride === "function") throw compileError(line, "크기가 실행 중에 정해지는 2차원 배열은 범위 기반 for로 돌 수 없어요");
+      const total = cellsDyn(R.t);
+      count = typeof total === "function" ? (f) => total(f) / stride : () => R.t.len;
+      baseOf = R.lv;
     }
-    const elem = this.need(R.t.of, line);
-    const stride = cellsDyn(elem);
-    if (typeof stride === "function") throw compileError(line, "크기가 실행 중에 정해지는 2차원 배열은 범위 기반 for로 돌 수 없어요");
-    const total = cellsDyn(R.t);
-    const count = typeof total === "function" ? (f) => total(f) / stride : () => R.t.len;
     const d = node.decl;
     let cur = null;
-    const fake = { t: elem, lv: () => cur, ev: () => (isStruct(elem) ? rt.loadStruct(cur, cells(elem), line) : rt.load(cur, line)), varName: `${d.name}의 원소` };
+    const fake = this.withLoad({ t: elem, lv: () => cur, varName: `${d.name}의 원소`, isConst: Boolean(R.isConst) }, line);
     let type = d.type;
     if (type.k === "auto") type = isArr(elem) ? ptr(elem.of) : elem;
     else if (type.k === "ref" && type.to.k === "auto") type = { ...type, to: elem };
@@ -511,7 +535,7 @@ export class Compiler {
     const name = d.name;
     return (f) => {
       rt.line = line;
-      const base = R.lv(f);
+      const base = baseOf(f);
       const len = count(f);
       for (let i = 0; i < len; i++) {
         cur = new Ptr(base.store, base.off + i * stride);
@@ -564,6 +588,477 @@ export class Compiler {
     };
   }
 
+  // ---------- C++ 2단계: std::string, std::vector ----------
+  /** 비어 있는(null) string/vector를 처음 쓸 때 만들어요 */
+  freshObj(type) {
+    return type.k === "string" ? newString([]) : newVector(type.of);
+  }
+
+  /** 식이 가리키는 string/vector 물건(Store)을 꺼내는 함수. 변수면 복사하지 않고 그 자리의 것을 써요. */
+  objRef(E, line) {
+    const rt = this.rt;
+    const type = E.t;
+    if (E.lv) {
+      const lv = E.lv;
+      return (f) => {
+        const p = lv(f);
+        rt.check(p, line, false);
+        let st = p.store.cells[p.off];
+        if (st == null) {
+          st = this.freshObj(type);
+          p.store.cells[p.off] = st;
+        }
+        return st;
+      };
+    }
+    const ev = E.ev;
+    return (f) => ev(f) || this.freshObj(type);
+  }
+
+  /** string에 이어 붙일 수 있는 값(string, 문자열, 글자)의 바이트들을 꺼내는 함수. 안 되면 null */
+  bytesOf(V, line, what) {
+    const rt = this.rt;
+    if (V.t.k === "string") { const ev = V.ev; return (f) => strBytes(ev(f)); }
+    if (isPtr(V.t) && isCharLike(V.t.to)) {
+      const ev = V.ev;
+      return (f) => {
+        const p = ev(f);
+        if (p === null) throw runtimeError(line, `NULL 문자열을 string에 쓰려고 했어요`);
+        return rt.readCString(p, line);
+      };
+    }
+    if (isInt(V.t) && V.t.bits === 8 && !V.t.isBool) { const ev = V.ev; return (f) => [ev(f) & 255]; }
+    if (what === null) return null;
+    throw compileError(line, `${friendlyType(V.t)}는 string에 ${what}할 수 없어요`,
+      isArith(V.t) ? "숫자를 글자로 바꾸려면 to_string(x)를 써요." : "string, \"문자열\", 'c' 글자만 쓸 수 있어요.");
+  }
+
+  /** E를 string/vector로 바꿔요 */
+  convObj(E, to, line, what) {
+    const rt = this.rt;
+    if (to.k === "string") {
+      if (isPtr(E.t) && isCharLike(E.t.to)) {
+        const ev = E.ev;
+        return {
+          t: to,
+          ev: (f) => {
+            const p = ev(f);
+            if (p === null) throw runtimeError(line, "NULL 문자열로 string을 만들려고 했어요");
+            return newString(rt.readCString(p, line));
+          },
+        };
+      }
+      throw compileError(line, `${what}에 ${friendlyType(E.t)}를 넣을 수 없어요`, isArith(E.t) ? "숫자를 글자로 바꾸려면 to_string(x)를 써요." : "string이 필요해요.");
+    }
+    if (E.t.k === "string" && isPtr(to) && isCharLike(to.to)) {
+      throw compileError(line, `string을 ${typeName(to)}로 바로 쓸 수 없어요`, "s.c_str() 처럼 c_str()을 붙이면 char * 문자열이 돼요.");
+    }
+    if (to.k === "vector" && E.t.k === "vector") {
+      throw compileError(line, `${typeName(E.t)}를 ${typeName(to)}에 넣을 수 없어요`, "원소의 타입이 같아야 해요.");
+    }
+    throw compileError(line, `${what}의 타입이 맞지 않아요`, `${typeName(to)}가 필요한데 ${friendlyType(E.t)}를 넣었어요.`);
+  }
+
+  /** vector의 원소 하나를 만드는 함수: 원소 칸들의 목록을 돌려줘요 */
+  elemValue(of, node, line, what) {
+    const unit = cells(of);
+    if (node && node.k === "initlist" && isStruct(of)) {
+      const init = this.initializer(of, node, line, what);
+      const empty = zerosOf(of);
+      return (f) => { const st = new Store(unit, what, of); st.cells = empty.slice(); init(f, st); return st.cells; };
+    }
+    if (isObj(of)) { const ev = this.objectValue(of, node, line, what); return (f) => [ev(f)]; }
+    if (node && node.k === "initlist") {
+      if (node.items.length !== 1) throw compileError(line, `${what}에는 값 하나를 넣어요`);
+      node = node.items[0];
+    }
+    const V = this.conv(this.value(this.expr(node), line), of, line, what);
+    const ev = V.ev;
+    return unit === 1 ? (f) => [ev(f)] : (f) => ev(f).slice();
+  }
+
+  /** string/vector의 처음 값: = 값, (괄호 값들), {목록} */
+  objectValue(type, init, line, name) {
+    const what = `'${name}'의 처음 값`;
+    if (!init) return () => null;
+    const rt = this.rt;
+    if (type.k === "string") {
+      let args = null;
+      if (init.k === "ctor") args = init.args;
+      else if (init.k === "initlist") args = init.items;
+      if (!args) return this.conv(this.value(this.expr(init), line), type, line, what).ev;
+      if (args.length === 0) return () => null;
+      if (args.length === 1) return this.conv(this.value(this.expr(args[0]), line), type, line, what).ev;
+      if (args.length === 2 && init.k === "ctor") {
+        // string(3, 'x') → "xxx"
+        const N = this.conv(this.value(this.expr(args[0]), line), T.long, line, what);
+        const C = this.conv(this.value(this.expr(args[1]), line), T.char, line, what);
+        return (f) => {
+          const n = Number(N.ev(f));
+          if (n < 0 || n > 10_000_000) throw runtimeError(line, `string(${n}, …)은 만들 수 없어요`);
+          return newString(new Array(n).fill(C.ev(f) & 255));
+        };
+      }
+      throw compileError(line, `${what}의 모양이 맞지 않아요`, "예: string s = \"안녕\"; string s(3, 'x');");
+    }
+    // vector
+    const of = type.of;
+    const unit = cells(of);
+    const fromList = (items) => {
+      const evs = items.map((x, i) => this.elemValue(of, x, line, `${name}[${i}]`));
+      return (f) => { const out = []; for (const ev of evs) out.push(...ev(f)); return newVector(of, out); };
+    };
+    if (init.k === "initlist") return fromList(init.items);
+    if (init.k !== "ctor") return this.conv(this.value(this.expr(init), line), type, line, what).ev;
+    const args = init.args;
+    if (args.length === 0) return () => null;
+    if (args.length === 1 && args[0].k === "initlist") return fromList(args[0].items);
+    const first = args.length <= 2 ? this.value(this.expr(args[0]), line) : null;
+    if (args.length === 1 && first.t.k === "vector") return this.conv(first, type, line, what).ev;
+    if (first && isInt(first.t)) {
+      // vector<int> v(5); vector<int> v(5, 1);
+      const N = this.conv(first, T.long, line, what);
+      const zeros = zerosOf(of);
+      const item = args[1] ? this.elemValue(of, args[1], line, `${name}의 원소`) : null;
+      return (f) => {
+        const n = Number(N.ev(f));
+        if (n < 0 || n * unit > 10_000_000) throw runtimeError(line, `vector를 ${n}칸으로 만들 수 없어요`, "개수가 음수이거나 너무 커요.");
+        const out = new Array(n * unit);
+        if (item) {
+          const v = item(f);
+          for (let i = 0; i < n; i++) {
+            const copy = cloneCells(arr(of, 1), v);
+            for (let k = 0; k < unit; k++) out[i * unit + k] = copy[k];
+          }
+        } else for (let i = 0; i < n * unit; i++) out[i] = zeros[i % unit];
+        return newVector(of, out);
+      };
+    }
+    void rt;
+    throw compileError(line, `${what}의 모양이 맞지 않아요`, "예: vector<int> v(5); vector<int> v(5, 0); vector<int> v = {1, 2, 3};");
+  }
+
+  /** s[i], v[i]: 범위를 벗어나면 친절하게 알려 줘요 */
+  objIndex(B, iNode, line, checked) {
+    const rt = this.rt;
+    const I = this.value(this.expr(iNode), line);
+    if (!isInt(I.t)) throw compileError(line, "[ ] 안의 번호는 정수여야 해요");
+    const S = this.objRef(B, line);
+    const isStr = B.t.k === "string";
+    const elem = isStr ? T.char : B.t.of;
+    const unit = cells(elem);
+    const who = B.varName || (isStr ? "string" : "vector");
+    const iev = I.ev;
+    const lv = (f) => {
+      const st = S(f);
+      const i = Number(iev(f));
+      const n = isStr ? strLen(st) : vecLen(st);
+      if (!(i >= 0 && i < n)) {
+        throw runtimeError(line, `${who}${checked ? ".at" : ""}[${i}]: ${isStr ? "글자" : "원소"}가 ${n}개라서 [0]~[${n - 1}]만 쓸 수 있어요`,
+          n === 0 ? `${who}가 비어 있어요. ${isStr ? "글자를 먼저 넣어 주세요." : "push_back으로 먼저 원소를 넣어 주세요."}` : "번호가 0부터 (크기 - 1)까지인지 확인해 보세요.");
+      }
+      return new Ptr(st, i * unit);
+    };
+    return this.withLoad({ t: elem, lv, isConst: Boolean(B.isConst), varName: `${who}[…]` }, line);
+  }
+
+  /** s.size(), v.push_back(x) 같은 함수 */
+  objMethod(B, name, node) {
+    const { line } = node;
+    const rt = this.rt;
+    const type = B.t;
+    const isStr = type.k === "string";
+    const who = B.varName || (isStr ? "string" : "vector");
+    const S = this.objRef(B, line);
+    const args = node.args;
+    const want = (min, max = min) => {
+      if (args.length < min || args.length > max) {
+        throw compileError(line, `${who}.${name}()에는 값 ${min === max ? min : `${min}~${max}`}개를 넣어요 (${args.length}개를 넣었어요)`);
+      }
+    };
+    const mutating = () => {
+      if (B.isConst) throw compileError(line, `const인 ${who}는 ${name}()으로 바꿀 수 없어요`);
+    };
+    const num = (i) => this.conv(this.value(this.expr(args[i]), line), T.long, line, `${name}의 ${i + 1}번째 값`).ev;
+    const len = (st) => (isStr ? strLen(st) : vecLen(st));
+    const empty = (st, what) => {
+      if (len(st) === 0) throw runtimeError(line, `비어 있는 ${who}에서 ${what}()을 불렀어요`, `${what}() 전에 ${isStr ? "글자가" : "원소가"} 있는지 empty()로 확인해 보세요.`);
+    };
+    const elem = isStr ? T.char : type.of;
+    const unit = cells(elem);
+    const ptrTo = (st, i) => new Ptr(st, i * unit);
+    const elemLv = (lv) => this.withLoad({ t: elem, lv, isConst: Boolean(B.isConst) }, line);
+    switch (name) {
+      case "size": case "length":
+        if (name === "length" && !isStr) break;
+        want(0);
+        return { t: T.ulong, ev: (f) => BigInt(len(S(f))) };
+      case "empty": want(0); return { t: T.bool, ev: (f) => (len(S(f)) === 0 ? 1 : 0) };
+      case "clear":
+        want(0); mutating();
+        return { t: T.void, ev: (f) => { const st = S(f); if (isStr) setStr(st, []); else { st.cells.length = 0; vecResized(st); } } };
+      case "begin": want(0); return { t: ptr(elem), ev: (f) => ptrTo(S(f), 0) };
+      case "end": want(0); return { t: ptr(elem), ev: (f) => { const st = S(f); return ptrTo(st, len(st)); } };
+      case "front": want(0); return elemLv((f) => { const st = S(f); empty(st, "front"); return ptrTo(st, 0); });
+      case "back": want(0); return elemLv((f) => { const st = S(f); empty(st, "back"); return ptrTo(st, len(st) - 1); });
+      case "at": want(1); return this.objIndex(B, args[0], line, true);
+      case "pop_back":
+        want(0); mutating();
+        return { t: T.void, ev: (f) => { const st = S(f); empty(st, "pop_back"); if (isStr) setStr(st, strBytes(st).slice(0, -1)); else { st.cells.length -= unit; vecResized(st); } } };
+      case "data": case "c_str":
+        if (name === "c_str" && !isStr) break;
+        want(0);
+        return { t: isStr ? Object.assign(ptr(T.char), { toConst: true }) : ptr(elem), ev: (f) => new Ptr(S(f), 0) };
+      case "push_back": case "emplace_back": {
+        want(1); mutating();
+        if (isStr) {
+          const C = this.conv(this.value(this.expr(args[0]), line), T.char, line, "push_back의 값");
+          return { t: T.void, ev: (f) => { const st = S(f); const c = C.ev(f); st.cells.splice(st.cells.length - 1, 0, c); st.type = arr(T.char, st.cells.length); } };
+        }
+        const item = this.elemValue(elem, args[0], line, `${who}.push_back의 값`);
+        return {
+          t: T.void,
+          ev: (f) => {
+            const v = item(f);
+            const st = S(f);
+            if (st.cells.length + v.length > 10_000_000) throw runtimeError(line, `${who}가 너무 커졌어요`, "끝없이 push_back 하고 있지 않은지 확인해 보세요.");
+            for (const x of v) st.cells.push(x);
+            vecResized(st);
+          },
+        };
+      }
+      case "resize": {
+        want(1, 2); mutating();
+        const N = num(0);
+        if (isStr) {
+          const C = args[1] ? this.conv(this.value(this.expr(args[1]), line), T.char, line, "resize의 값").ev : () => 0;
+          return { t: T.void, ev: (f) => { const st = S(f); const n = Number(N(f)); const b = strBytes(st); while (b.length < n) b.push(C(f) & 255); setStr(st, b.slice(0, n)); } };
+        }
+        const item = args[1] ? this.elemValue(elem, args[1], line, "resize의 값") : null;
+        const zeros = zerosOf(elem);
+        return {
+          t: T.void,
+          ev: (f) => {
+            const st = S(f);
+            const n = Number(N(f));
+            if (n < 0 || n * unit > 10_000_000) throw runtimeError(line, `vector를 ${n}칸으로 바꿀 수 없어요`);
+            const v = item ? item(f) : zeros;
+            while (st.cells.length < n * unit) for (const x of cloneCells(arr(elem, 1), v)) st.cells.push(x);
+            st.cells.length = n * unit;
+            vecResized(st);
+          },
+        };
+      }
+      default: break;
+    }
+    if (isStr) return this.strMethod(B, name, node, S, want, mutating);
+    return this.vecMethod(B, name, node, S, want, mutating);
+  }
+
+  strMethod(B, name, node, S, want, mutating) {
+    const { line } = node;
+    const args = node.args;
+    const who = B.varName || "string";
+    const num = (i, dflt) => (args[i] ? this.conv(this.value(this.expr(args[i]), line), T.ulong, line, `${name}의 ${i + 1}번째 값`).ev : () => dflt);
+    const text = (i) => this.bytesOf(this.value(this.expr(args[i]), line), line, "쓸");
+    const pos = (st, p, what) => {
+      const n = strLen(st);
+      const i = p >= NPOS ? Infinity : Number(p);
+      if (i > n) throw runtimeError(line, `${who}.${what}(): 위치 ${i}는 문자열 길이(${n})보다 커요`, "진짜 C++에서는 out_of_range 예외가 나요.");
+      return i;
+    };
+    const count = (p) => (p >= NPOS ? Infinity : Number(p));
+    const find = (hay, needle, from, back) => {
+      const n = hay.length;
+      const m = needle.length;
+      if (back) {
+        for (let i = Math.min(from, n - m); i >= 0; i--) if (needle.every((b, k) => hay[i + k] === b)) return i;
+        return -1;
+      }
+      for (let i = from; i + m <= n; i++) if (needle.every((b, k) => hay[i + k] === b)) return i;
+      return -1;
+    };
+    switch (name) {
+      case "substr": {
+        want(0, 2);
+        const P = num(0, 0n);
+        const N = num(1, NPOS);
+        return { t: STRING_T, ev: (f) => { const st = S(f); const i = pos(st, P(f), "substr"); return newString(strBytes(st).slice(i, i + count(N(f)))); } };
+      }
+      case "find": case "rfind": {
+        want(1, 2);
+        const X = text(0);
+        const back = name === "rfind";
+        const P = num(1, back ? NPOS : 0n);
+        return {
+          t: T.ulong,
+          ev: (f) => {
+            const hay = strBytes(S(f));
+            const from = count(P(f));
+            const i = find(hay, X(f), back ? Math.min(from, hay.length) : from, back);
+            return i < 0 ? NPOS : BigInt(i);
+          },
+        };
+      }
+      case "append": {
+        want(1); mutating();
+        const X = text(0);
+        return { t: T.void, ev: (f) => { const st = S(f); setStr(st, strBytes(st).concat(X(f))); } };
+      }
+      case "insert": {
+        want(2); mutating();
+        const P = num(0, 0n);
+        const X = text(1);
+        return { t: T.void, ev: (f) => { const st = S(f); const i = pos(st, P(f), "insert"); const b = strBytes(st); b.splice(i, 0, ...X(f)); setStr(st, b); } };
+      }
+      case "erase": {
+        want(0, 2); mutating();
+        const P = num(0, 0n);
+        const N = num(1, NPOS);
+        return { t: T.void, ev: (f) => { const st = S(f); const i = pos(st, P(f), "erase"); const b = strBytes(st); b.splice(i, Math.min(count(N(f)), b.length - i)); setStr(st, b); } };
+      }
+      case "replace": {
+        want(3); mutating();
+        const P = num(0, 0n);
+        const N = num(1, NPOS);
+        const X = text(2);
+        return { t: T.void, ev: (f) => { const st = S(f); const i = pos(st, P(f), "replace"); const b = strBytes(st); b.splice(i, Math.min(count(N(f)), b.length - i), ...X(f)); setStr(st, b); } };
+      }
+      case "compare": {
+        want(1);
+        const X = text(0);
+        return { t: T.int, ev: (f) => { const c = strCompare(S(f), newString(X(f))); return c < 0 ? -1 : c > 0 ? 1 : 0; } };
+      }
+      default:
+        throw compileError(line, `string에는 ${name}() 함수가 없어요`,
+          "쓸 수 있는 것: size, length, empty, push_back, pop_back, append, substr, find, rfind, insert, erase, replace, compare, c_str, at, front, back, clear, resize, begin, end");
+    }
+  }
+
+  vecMethod(B, name, node, S, want, mutating) {
+    const { line } = node;
+    const rt = this.rt;
+    const args = node.args;
+    const elem = B.t.of;
+    const unit = cells(elem);
+    const who = B.varName || "vector";
+    const iter = (i) => {
+      const P = this.value(this.expr(args[i]), line);
+      if (!isPtr(P.t)) throw compileError(line, `${name}의 ${i + 1}번째 값은 위치(반복자)예요`, `예: ${who}.${name}(${who}.begin() + 2, …)`);
+      return P.ev;
+    };
+    const indexOf = (st, p, allowEnd) => {
+      if (p === null || p.store !== st) throw runtimeError(line, `${who}.${name}()에 다른 곳의 위치를 넣었어요`, `${who}.begin() + 번호 처럼 같은 vector의 위치를 넣어요.`);
+      const i = p.off / unit;
+      const n = vecLen(st);
+      if (i < 0 || i > n || (!allowEnd && i === n)) throw runtimeError(line, `${who}.${name}(): 위치가 범위를 벗어났어요`);
+      return i;
+    };
+    switch (name) {
+      case "insert": {
+        want(2); mutating();
+        const It = iter(0);
+        const item = this.elemValue(elem, args[1], line, `${who}.insert의 값`);
+        return { t: ptr(elem), ev: (f) => { const st = S(f); const i = indexOf(st, It(f), true); const v = item(f); st.cells.splice(i * unit, 0, ...v); vecResized(st); return new Ptr(st, i * unit); } };
+      }
+      case "erase": {
+        want(1, 2); mutating();
+        const A = iter(0);
+        const Z = args[1] ? iter(1) : null;
+        return {
+          t: ptr(elem),
+          ev: (f) => {
+            const st = S(f);
+            const i = indexOf(st, A(f), false);
+            const j = Z ? indexOf(st, Z(f), true) : i + 1;
+            if (j < i) throw runtimeError(line, `${who}.erase(처음, 끝)의 순서가 바뀌었어요`);
+            st.cells.splice(i * unit, (j - i) * unit);
+            vecResized(st);
+            return new Ptr(st, i * unit);
+          },
+        };
+      }
+      default:
+        void rt;
+        throw compileError(line, `vector에는 ${name}() 함수가 없어요`,
+          "쓸 수 있는 것: size, empty, push_back, pop_back, front, back, at, clear, resize, insert, erase, begin, end, data");
+    }
+  }
+
+  /** string + string, s == "abc", v1 == v2 */
+  objBinary(op, L, R, line) {
+    const boolT = T.bool;
+    if (L.t.k === "string" || R.t.k === "string") {
+      const A = this.bytesOf(L, line, null);
+      const B = this.bytesOf(R, line, null);
+      if (op === "+") {
+        if (!A || !B || (L.t.k !== "string" && R.t.k !== "string")) {
+          const other = A ? R : L;
+          throw compileError(line, `string에 ${friendlyType(other.t)}를 + 할 수 없어요`, isArith(other.t) ? "숫자를 붙이려면 to_string(x)를 써요." : "string, \"문자열\", 'c' 글자만 붙일 수 있어요.");
+        }
+        return { t: STRING_T, ev: (f) => newString(A(f).concat(B(f))) };
+      }
+      if (op in COMPARE) {
+        const isText = (V) => V.t.k === "string" || (isPtr(V.t) && isCharLike(V.t.to));
+        if (!isText(L) || !isText(R)) throw compileError(line, `string과 ${friendlyType(L.t.k === "string" ? R.t : L.t)}는 ${op}로 비교할 수 없어요`);
+        const cmp = COMPARE[op];
+        return { t: boolT, ev: (f) => { const x = A(f); const y = B(f); const n = Math.min(x.length, y.length); let c = 0; for (let i = 0; i < n && c === 0; i++) c = x[i] - y[i]; if (c === 0) c = x.length - y.length; return cmp(c, 0); } };
+      }
+      throw compileError(line, `string에는 '${op}' 계산을 쓸 수 없어요`);
+    }
+    if (L.t.k === "vector" && R.t.k === "vector" && (op === "==" || op === "!=") && sameType(L.t, R.t) && isScalar(L.t.of)) {
+      const eq = (a, b) => vecLen(a) === vecLen(b) && (a ? a.cells : []).every((x, i) => x === b.cells[i]);
+      return { t: boolT, ev: (f) => ((eq(L.ev(f), R.ev(f)) ? 1 : 0) ^ (op === "!=" ? 1 : 0)) };
+    }
+    throw compileError(line, `${friendlyType(L.t)}와 ${friendlyType(R.t)}로는 '${op}' 계산을 할 수 없어요`);
+  }
+
+  /** getline(cin, s), to_string(x), stoi(s) … */
+  stdStrFunc(name, node) {
+    const { line } = node;
+    const rt = this.rt;
+    const args = node.args;
+    if (name === "getline") {
+      if (args.length < 2 || args.length > 3) throw compileError(line, "getline에는 (cin, 문자열변수) 를 넣어요", "예: getline(cin, line);");
+      const In = this.value(this.expr(args[0]), line);
+      if (In.t.k !== "stream" || In.t.dir !== "in") throw compileError(line, "getline의 첫 번째 값은 cin이에요", "예: getline(cin, line);");
+      const Sx = this.expr(args[1]);
+      if (Sx.t.k !== "string" || !Sx.lv) throw compileError(line, "getline의 두 번째 값은 string 변수예요", "char 배열이라면 cin.getline 대신 string을 써 보세요.");
+      if (Sx.isConst) throw compileError(line, "const string에는 getline으로 읽을 수 없어요");
+      const D = args[2] ? this.conv(this.value(this.expr(args[2]), line), T.char, line, "getline의 끝 글자").ev : () => 10;
+      const S = this.objRef(Sx, line);
+      return {
+        t: In.t,
+        ev: (f) => {
+          const s = In.ev(f);
+          const bytes = streamGetLine(rt, D(f) & 255, line);
+          if (bytes) setStr(S(f), bytes);
+          return s;
+        },
+      };
+    }
+    if (args.length !== 1) throw compileError(line, `${name}에는 값 하나를 넣어요`);
+    const V = this.value(this.expr(args[0]), line);
+    if (name === "to_string") {
+      if (!isArith(V.t)) throw compileError(line, `to_string에는 숫자를 넣어요 (${friendlyType(V.t)}를 넣었어요)`);
+      const t = V.t;
+      return { t: STRING_T, ev: (f) => newString(toStringBytes(t, V.ev(f))) };
+    }
+    const B = this.bytesOf(V, line, null);
+    if (!B || V.t.bits === 8) throw compileError(line, `${name}에는 string을 넣어요`, `예: ${name}("42")`);
+    const kind = name === "stod" || name === "stof" ? "float" : "int";
+    const ret = { stoi: T.int, stol: T.long, stoll: T.llong, stod: T.double, stof: T.float }[name];
+    return {
+      t: ret,
+      ev: (f) => {
+        const v = parseNumber(B(f), kind, name, line);
+        if (kind === "float") return ret.bits === 32 ? Math.fround(v) : v;
+        if (ret === T.int && (v > 2147483647n || v < -2147483648n)) throw runtimeError(line, `${name}: 숫자가 int에 담기에는 너무 커요`, "진짜 C++에서는 out_of_range 예외가 나요. stoll을 써 보세요.");
+        return convert(v, T.llong, ret);
+      },
+    };
+  }
+
   /** cout << 값 / cin >> 변수 */
   streamOp(node, L) {
     const { op, line } = node;
@@ -577,7 +1072,8 @@ export class Compiler {
         throw compileError(line, `구조체(${typeName(t)})는 cout으로 바로 출력할 수 없어요`, "멤버를 하나씩 출력해 주세요. 예: cout << p.x << \" \" << p.y;  (operator<<는 C++ 4단계)");
       }
       if (t.k === "stream") throw compileError(line, `${name} << 뒤에 스트림이 또 왔어요`, "예: cout << a << b;");
-      if (!isArith(t) && !isPtr(t) && t.k !== "manip") throw compileError(line, `${friendlyType(t)}는 cout으로 출력할 수 없어요`);
+      if (t.k === "vector") throw compileError(line, "vector는 cout으로 한 번에 출력할 수 없어요", "for (int x : v) cout << x << ' '; 처럼 하나씩 출력해요.");
+      if (!isArith(t) && !isPtr(t) && t.k !== "manip" && t.k !== "string") throw compileError(line, `${friendlyType(t)}는 cout으로 출력할 수 없어요`);
       const lev = L.ev;
       const rev = R.ev;
       return { t: L.t, varName: name, ev: (f) => { const s = lev(f); streamPut(rt, s, t, rev(f), line); return s; } };
@@ -592,6 +1088,12 @@ export class Compiler {
     if (isArr(t) && !isCharLike(t.of)) throw compileError(line, "배열 전체는 cin으로 한 번에 읽을 수 없어요", "for 문으로 cin >> a[i]; 처럼 한 칸씩 읽어요.");
     if (isPtr(t)) throw compileError(line, "char * 에는 cin으로 글자를 읽을 수 없어요", "char 이름[크기]; 배열을 만들어서 cin >> 이름; 처럼 읽어요.");
     if (isStruct(t)) throw compileError(line, `구조체(${typeName(t)})는 cin으로 바로 읽을 수 없어요`, "멤버를 하나씩 읽어 주세요. 예: cin >> p.x >> p.y;");
+    if (t.k === "vector") throw compileError(line, "vector 전체는 cin으로 한 번에 읽을 수 없어요", "for 문으로 cin >> v[i]; 처럼 한 칸씩 읽거나, 읽은 값을 push_back 해요.");
+    if (t.k === "string") {
+      const lev0 = L.ev;
+      const target0 = R.lv;
+      return { t: L.t, varName: name, ev: (f) => { const s = lev0(f); const w = streamGetWord(rt, line); if (w) rt.storeAt(target0(f), newString(w), line); return s; } };
+    }
     if (!isArith(t) && !isArr(t)) throw compileError(line, `${friendlyType(t)}에는 cin으로 읽을 수 없어요`);
     const lev = L.ev;
     const target = R.lv;
@@ -709,6 +1211,16 @@ export class Compiler {
       const to = this.resolveType(t.to, { line: opts.line });
       if (to.k === "ref") throw compileError(t.line ?? opts.line, "참조의 참조는 만들 수 없어요");
       return { k: "ref", to, size: 8, toConst: Boolean(t.toConst) };
+    }
+    if (t.k === "string") {
+      if (!this.hasHeader("string") && !this.hasHeader("iostream")) this.needHeader("string", "string", t.line ?? opts.line);
+      return STRING_T;
+    }
+    if (t.k === "vector") {
+      this.needHeader("vector", "vector", t.line ?? opts.line);
+      const of = this.need(this.resolveType(t.of, { line: t.line ?? opts.line }), t.line ?? opts.line);
+      if (of.k === "ref" || isVoid(of) || isFunc(of) || isArr(of)) throw compileError(t.line ?? opts.line, `vector<${typeName(of)}>는 만들 수 없어요`);
+      return vectorOf(of);
     }
     if (t.k === "auto") {
       throw compileError(opts.line ?? t.line, "auto는 처음 값이 있는 변수에만 쓸 수 있어요", "예: auto x = 3.5;");
@@ -841,6 +1353,7 @@ export class Compiler {
   conv(E, to, line, what = "값") {
     const from = E.t;
     if (sameType(from, to)) return E;
+    if (isObj(to) || isObj(from)) return this.convObj(E, to, line, what);
     if (isVoid(to)) return { t: to, ev: E.ev };
     if (isArith(to) && isArith(from)) {
       const out = { t: to, ev: (f) => convert(E.ev(f), from, to) };
@@ -933,6 +1446,10 @@ export class Compiler {
       case "member": return this.member(node);
       case "vaarg": return this.vaArg(node);
       case "new": return this.newExpr(node);
+      case "construct": {
+        const type = this.resolveType(node.type, { line });
+        return { t: type, ev: this.objectValue(type, node.args ? { k: "ctor", args: node.args, line } : node.list, line, typeName(type)) };
+      }
       case "delete": return this.deleteExpr(node);
       case "compound": return this.compound(node);
       case "cast": return this.cast(node);
@@ -1121,7 +1638,12 @@ export class Compiler {
     const lv = E.lv;
     if (isStruct(E.t)) {
       const n = cells(this.layout(E.t, line));
-      E.ev = (f) => rt.loadStruct(lv(f), n, line);
+      const t = E.t;
+      E.ev = hasObj(t) ? (f) => cloneCells(t, rt.loadStruct(lv(f), n, line)) : (f) => rt.loadStruct(lv(f), n, line);
+    } else if (isObj(E.t)) {
+      // string, vector를 값으로 쓰면 복사본이 생겨요
+      const t = E.t;
+      E.ev = (f) => cloneValue(t, rt.load(lv(f), line));
     } else {
       E.ev = (f) => rt.load(lv(f), line);
     }
@@ -1222,6 +1744,7 @@ export class Compiler {
   }
 
   binaryValues(op, L, R, line) {
+    if (isObj(L.t) || isObj(R.t)) return this.objBinary(op, L, R, line);
     if (op in COMPARE) {
       if (isArith(L.t) && isArith(R.t)) {
         const ct = common(L.t, R.t);
@@ -1337,6 +1860,12 @@ export class Compiler {
       }
       return { t: L.t, ev: (f) => { const p = L.lv(f); const v = R.ev(f); rt.storeAt(p, v, line); return v; } };
     }
+    if (isObj(L.t)) {
+      if (L.t.k !== "string" || node.op !== "+=") throw compileError(line, `${friendlyType(L.t)}에는 '${node.op}'를 쓸 수 없어요`);
+      const S = this.objRef(L, line);
+      const add = this.bytesOf(this.value(this.expr(node.r), line), line, "+=");
+      return { t: L.t, ev: (f) => { const st = S(f); setStr(st, strBytes(st).concat(add(f))); return cloneValue(L.t, st); } };
+    }
     const op = node.op.slice(0, -1);
     const R = this.value(this.expr(node.r), line);
     // L op= R 을 L = L op R 처럼 계산해요 (L은 한 번만 찾아요).
@@ -1446,6 +1975,7 @@ export class Compiler {
     const { line } = node;
     const rt = this.rt;
     let B = this.expr(node.e);
+    if (this.cpp && isObj(B.t)) return this.objIndex(B, node.i, line, false);
     let I = this.expr(node.i);
     if (B.fnName) throw compileError(line, `함수 '${B.fnName}'에는 [ ]를 쓸 수 없어요`);
     B = this.value(B, line);
@@ -1510,9 +2040,17 @@ export class Compiler {
   // ---------- 함수 호출 ----------
   call(node) {
     const { line } = node;
-    if (this.cpp && node.callee.k === "member" && !node.callee.arrow) {
-      const B = this.expr(node.callee.e);
-      if (B.t.k === "stream") return this.streamMethod(B, node.callee.name, node);
+    if (this.cpp && node.callee.k === "member") {
+      if (node.callee.arrow) {
+        const P = this.value(this.expr(node.callee.e), line);
+        if (isPtr(P.t) && isObj(P.t.to)) {
+          return this.objMethod(this.withLoad({ t: P.t.to, lv: P.ev, isConst: Boolean(P.t.toConst) }, line), node.callee.name, node);
+        }
+      } else {
+        const B = this.expr(node.callee.e);
+        if (B.t.k === "stream") return this.streamMethod(B, node.callee.name, node);
+        if (isObj(B.t)) return this.objMethod(B, node.callee.name, node);
+      }
     }
     if (node.callee.k === "id") {
       let name = this.resolveName(node.callee.name);
@@ -1529,6 +2067,10 @@ export class Compiler {
         if (MANIP_MAKERS[name]) this.stdIdentifier(name, line); // using이 없다고 알려 줘요
         if (base === "min" || base === "max") return this.stdMinMax(base, node);
         if (base === "swap") return this.stdSwap(node);
+        if (STR_FUNCS.has(base)) return this.stdStrFunc(base, node);
+        if (base === null && STR_FUNCS.has(name)) {
+          throw compileError(line, `'${name}'는 std::${name}이에요`, `맨 위에 using namespace std; 를 넣거나 std::${name} 처럼 써요.`);
+        }
         if (name.startsWith("std::")) {
           if (!BUILTINS[base]) this.stdIdentifier(name, line);
           name = base;
@@ -1640,7 +2182,7 @@ export class Compiler {
   callUser(fi, node) {
     let pre = null;
     if (fi.overloads && fi.overloads.length > 1) {
-      pre = node.args.map((a) => this.expr(a));
+      pre = node.args.map((a) => (a.k === "initlist" ? { t: { k: "initlist" }, initlist: true } : this.expr(a)));
       fi = this.pickOverload(fi.overloads, pre, node, fi.name);
     }
     const target = fi;
@@ -1662,7 +2204,18 @@ export class Compiler {
     const argNodes = [...node.args];
     for (let i = node.args.length; i < params.length && !ftype.variadic; i++) argNodes.push(params[i].dflt);
     const args = argNodes.map((a, i) => {
-      const raw = pre && pre[i] ? pre[i] : this.expr(a);
+      if (a && a.k === "initlist") {
+        const pt = params[i] ? params[i].type : null;
+        const target = pt && pt.k === "ref" ? pt.to : pt;
+        if (!target || !(isStruct(target) || isObj(target))) throw compileError(line, `'${name}'의 ${i + 1}번째 값에는 { } 를 쓸 수 없어요`);
+        const make = this.elemValue(target, a, line, `'${name}'의 ${i + 1}번째 값`);
+        if (pt.k === "ref") {
+          if (!pt.toConst) throw compileError(line, `{ } 값은 ${typeName(pt)}로 받을 수 없어요`, `const ${typeName(target)} & 로 받아 주세요.`);
+          return { ev: (f) => { const st = new Store(cells(target), "임시 값", target); st.cells = make(f); return new Ptr(st, 0); } };
+        }
+        return { ev: isStruct(target) ? make : (f) => make(f)[0] };
+      }
+      const raw = pre && pre[i] && !pre[i].initlist ? pre[i] : this.expr(a);
       if (params[i] && params[i].type.k === "ref") return { ev: this.bindRef(params[i].type, raw, line, `'${name}'의 ${i + 1}번째 값`) };
       const E = this.value(raw, line);
       if (params[i]) return this.conv(E, params[i].type, line, `'${name}'의 ${i + 1}번째 값`);
@@ -1909,6 +2462,17 @@ export class Compiler {
   /** 처음 값 넣기: (frame, store) => void 를 돌려줘요. */
   initializer(type, init, line, name) {
     if (!init) return null;
+    if (isObj(type)) {
+      const ev = this.objectValue(type, init, line, name);
+      return (f, st) => { st.cells[0] = ev(f); };
+    }
+    if (init.k === "ctor") {
+      // int x(5); 는 int x = 5; 와 같아요
+      if (init.args.length !== 1 || isStruct(type) || isArr(type)) {
+        throw compileError(line, `'${name}'의 괄호 안 처음 값이 맞지 않아요`, isStruct(type) ? "생성자는 C++ 3단계(클래스)에서 지원해요. { } 로 처음 값을 넣어 주세요." : "값 하나를 넣어요.");
+      }
+      init = init.args[0];
+    }
     if (isArr(type) || (isStruct(type) && init.k === "initlist")) {
       // 묶음(배열, 구조체): 먼저 모두 0으로 채우고, 적힌 값만 넣어요 (C 규칙)
       const zeros = zerosOf(type);
@@ -1945,6 +2509,10 @@ export class Compiler {
 
   /** 처음 값 하나를 off 위치에 놓아요. */
   place(type, init, off, entries, line, name) {
+    if (isObj(type)) {
+      entries.push({ off, ev: this.objectValue(type, init, line, name) });
+      return undefined;
+    }
     if (isArr(type)) return this.flattenArray(type, init, off, entries, line, name);
     if (isStruct(type)) {
       if (init.k === "initlist") return this.flattenStruct(type, init, off, entries, line, name);
@@ -2133,9 +2701,12 @@ export class Compiler {
         });
         continue;
       }
+      const empty = hasObj(type) ? zerosOf(type) : null; // string, vector는 빈 값으로 시작해요
       closures.push(init
-        ? (f) => { rt.line = line; const st = new Store(size, name, type); f[slot] = st; init(f, st); return NORMAL; }
-        : (f) => { f[slot] = new Store(size, name, type); return NORMAL; });
+        ? (f) => { rt.line = line; const st = new Store(size, name, type); if (empty) st.cells = empty.slice(); f[slot] = st; init(f, st); return NORMAL; }
+        : empty
+          ? (f) => { const st = new Store(size, name, type); st.cells = empty.slice(); f[slot] = st; return NORMAL; }
+          : (f) => { f[slot] = new Store(size, name, type); return NORMAL; });
     }
     return closures;
   }

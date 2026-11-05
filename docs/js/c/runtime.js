@@ -2,7 +2,7 @@
 
 import {
   T, Ptr, Store, FnRef, ptr, arr, runtimeError, reinterpret, sameType, convert, isInt, isFloat, isPtr, isArr, isCharLike, is64, isStruct,
-  typeName, utf8, baseOf, cells, zeroOf, zerosOf,
+  typeName, utf8, baseOf, cells, zeroOf, zerosOf, STRING_T, isObj, hasObj,
 } from "./types.js";
 
 /** 입력이 더 필요해서 실행을 멈출 때 던지는 신호. */
@@ -329,6 +329,13 @@ export class Runtime {
     const v = store.cells[off];
     if (v === undefined) return "?";
     if (v instanceof FnRef) return `→ 함수 ${v.fi.name}`;
+    if (type.k === "string") return JSON.stringify(new TextDecoder().decode(Uint8Array.from(strBytes(v))));
+    if (type.k === "vector") {
+      const n = vecLen(v);
+      const parts = [];
+      for (let i = 0; i < Math.min(n, 20); i++) parts.push(this.formatValue(type.of, v, i * v.unit));
+      return `{${parts.join(", ")}${n > 20 ? ", …" : ""}} (${n}개)`;
+    }
     if (type.k === "ref") return v instanceof Ptr ? `→ ${this.formatValue(type.to, v.store, v.off)} (참조)` : "?";
     if (type.k === "jmpbuf") return v && v.jmp ? "(돌아올 자리 저장됨)" : "?";
     if (type.k === "valist") return v ? `(가변 인자 ${v.args.length}개 중 ${v.i}개 꺼냄)` : "(비어 있음)";
@@ -1556,7 +1563,9 @@ export function streamPut(rt, s, type, v, line) {
   }
   let bytes = null;
   let text = null;
-  if (isInt(type) && type.isBool) {
+  if (type.k === "string") {
+    bytes = strBytes(v);
+  } else if (isInt(type) && type.isBool) {
     text = st.boolalpha ? (v ? "true" : "false") : v ? "1" : "0";
   } else if (isInt(type) && type.bits === 8) {
     bytes = [v & 255]; // char는 숫자가 아니라 글자로 나와요
@@ -1651,4 +1660,148 @@ export function streamIgnore(rt, n, delim, line) {
     if (b < 0) { st.eof = true; return; }
     if (b === delim) return;
   }
+}
+
+
+// =====================================================================
+// C++ std::string, std::vector
+// 값 하나가 Store 하나예요. string은 char 칸들 + 끝의 0, vector는 원소 칸들.
+// 변수에서 값을 꺼내 쓸 때(복사) 새 Store를 만들어서, 두 변수가 서로 영향을 주지 않아요.
+// 비어 있는 값은 null로 두었다가 처음 바꿀 때 만들어요.
+// =====================================================================
+
+export const NPOS = 18446744073709551615n;
+
+export function newString(bytes) {
+  const st = new Store(bytes.length + 1, "string", arr(T.char, bytes.length + 1));
+  for (let i = 0; i < bytes.length; i++) st.cells[i] = convert(bytes[i], T.int, T.char);
+  st.cells[bytes.length] = 0;
+  st.isString = true;
+  return st;
+}
+
+/** string의 바이트들 (0~255) */
+export function strBytes(st) {
+  if (!st) return [];
+  const out = new Array(st.cells.length - 1);
+  for (let i = 0; i < out.length; i++) out[i] = st.cells[i] & 255;
+  return out;
+}
+
+export const strLen = (st) => (st ? st.cells.length - 1 : 0);
+
+/** string의 내용을 통째로 바꿔요 (같은 Store를 그대로 써서 가리키던 주소가 살아 있어요) */
+export function setStr(st, bytes) {
+  st.cells.length = 0;
+  for (const b of bytes) st.cells.push(convert(b, T.int, T.char));
+  st.cells.push(0);
+  st.type = arr(T.char, st.cells.length);
+}
+
+export function newVector(of, cellsArr = []) {
+  const unit = cells(of);
+  const st = new Store(0, "vector", arr(of, cellsArr.length / unit));
+  st.cells = cellsArr;
+  st.isVector = true;
+  st.unit = unit;
+  st.of = of;
+  return st;
+}
+
+export const vecLen = (st) => (st ? st.cells.length / st.unit : 0);
+
+export function vecResized(st) {
+  st.type = arr(st.of, st.cells.length / st.unit);
+}
+
+/** 값 하나를 깊게 복사해요 (string, vector, 그 둘을 품은 구조체) */
+export function cloneValue(type, v) {
+  if (v === null || v === undefined) return v;
+  if (type.k === "string") {
+    const st = new Store(0, "string", v.type);
+    st.cells = v.cells.slice();
+    st.isString = true;
+    return st;
+  }
+  if (type.k === "vector") {
+    return newVector(type.of, cloneCells(arr(type.of, v.cells.length / v.unit), v.cells));
+  }
+  return v;
+}
+
+/** 칸 목록을 복사해요. 안에 string/vector가 있으면 그것도 새로 만들어요. */
+export function cloneCells(type, cellsArr) {
+  const out = cellsArr.slice();
+  if (!hasObj(type)) return out;
+  const walk = (t, off) => {
+    if (isObj(t)) out[off] = cloneValue(t, out[off]);
+    else if (isStruct(t)) { for (const f of t.fields) walk(f.type, off + f.off); }
+    else if (isArr(t)) { const u = cells(t.of); for (let i = 0; i < t.len; i++) walk(t.of, off + i * u); }
+  };
+  walk(type, 0);
+  return out;
+}
+
+/** 두 string 비교: 음수, 0, 양수 */
+export function strCompare(a, b) {
+  const x = strBytes(a);
+  const y = strBytes(b);
+  const n = Math.min(x.length, y.length);
+  for (let i = 0; i < n; i++) if (x[i] !== y[i]) return x[i] - y[i];
+  return x.length - y.length;
+}
+
+/** cin >> s: 공백 전까지 한 단어 */
+export function streamGetWord(rt, line) {
+  const st = rt.streamState(STDIN);
+  if (st.fail) return null;
+  const src = rt.reader(STDIN, line);
+  while (isSpace(src.peek())) src.read();
+  if (src.peek() < 0) {
+    st.fail = true;
+    st.eof = true;
+    return null;
+  }
+  const bytes = [];
+  while (src.peek() >= 0 && !isSpace(src.peek())) bytes.push(src.read());
+  return bytes;
+}
+
+/** getline(cin, s): 줄 끝(\n)까지 읽고 \n은 버려요 */
+export function streamGetLine(rt, delim, line) {
+  const st = rt.streamState(STDIN);
+  if (st.fail) return null;
+  const src = rt.reader(STDIN, line);
+  if (src.peek() < 0) {
+    st.fail = true;
+    st.eof = true;
+    return null;
+  }
+  const bytes = [];
+  for (;;) {
+    const b = src.read();
+    if (b < 0) { st.eof = true; break; }
+    if (b === delim) break;
+    bytes.push(b);
+  }
+  return bytes;
+}
+
+/** to_string(값) */
+export function toStringBytes(type, v) {
+  if (isFloat(type)) {
+    const { text, negative } = formatFloat(v, "f", 6);
+    return utf8(`${negative ? "-" : ""}${text}`);
+  }
+  return utf8(String(v));
+}
+
+/** stoi("42") 같은 글자 → 숫자 */
+export function parseNumber(bytes, kind, name, line) {
+  const text = new TextDecoder().decode(Uint8Array.from(bytes));
+  const m = kind === "float" ? text.match(/^\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/) : text.match(/^\s*[+-]?\d+/);
+  if (!m) {
+    throw runtimeError(line, `${name}("${text}"): 숫자로 바꿀 수 없어요`, "진짜 C++에서는 invalid_argument 예외가 나요. 글자가 숫자로 시작하는지 확인해 보세요.");
+  }
+  return kind === "float" ? parseFloat(m[0]) : BigInt(m[0].trim());
 }

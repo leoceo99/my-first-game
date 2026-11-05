@@ -28,9 +28,17 @@ C++ 코드의 대부분은 C 문법이라서, 단단한 C 실행기가 가장 �
    `cout.put` `precision` `width`, `std::min` `std::max`, `<bits/stdc++.h>`.
    C++답게 비교 결과는 `bool`, `'a'`는 `char`예요. 출력 규칙(실수 6자리, char는 글자)은 진짜 C++과 같아요.
    실행: `js/c/runtime.js`의 `streamPut`/`streamGet`, 컴파일: `js/c/compile.js`의 `streamOp`.
-2. **C++다운 기본기**: 참조(`int &r`), 함수 오버로딩(이름 + 매개변수 타입으로 고르기), 기본 인자,
-   `new`/`delete`(malloc 메모리 모델 재사용), `auto`, `constexpr`, `static_cast`, 범위 기반 `for`,
-   이름공간(`namespace`, `::`), `const int N = 10; int a[N];`, `std::string`, `std::vector`
+2. ✅ **C++다운 기본기** (끝남): 참조(변수, 매개변수, 돌려주는 값, `const T&`에 임시 값),
+   기본 인자(선언에만 적어도 돼요), 오버로딩(C++처럼 가장 잘 맞는 함수를 고르고, 애매하면 알려 줘요),
+   `new`/`new[]`/`delete`/`delete[]`(짝이 틀리거나 두 번 지우면 알려 줘요), `auto`, `auto&`, `constexpr`,
+   `const int N = 10; int a[N];`, `static_cast`, 범위 기반 `for`, 이름공간(`namespace`, `geo::f`, `using namespace geo`),
+   `std::swap`/`min`/`max`, `int x(5)`, `int x{5}`, `Point{1, 2}`.
+   **`std::string`**: `+` `+=` 비교, `[]`, `size` `substr` `find` `rfind` `insert` `erase` `replace` `c_str` `push_back` …,
+   `cin >>`, `getline`, `to_string`, `stoi`/`stod`. **`std::vector`**: `{1, 2, 3}`, `(n)`, `(n, 값)`, `push_back`
+   `pop_back` `size` `back` `front` `at` `resize` `insert` `erase` `clear` `begin`/`end`(반복자), `vector<vector<int>>`,
+   `vector<string>`, 구조체 원소. 값으로 넘기면 복사되고, 범위를 벗어나면 친절하게 알려 줘요.
+   만든 곳: string/vector 값은 `js/c/runtime.js`의 `newString`/`newVector`(값 하나 = Store 하나, 읽을 때 복사),
+   컴파일은 `js/c/compile.js`의 `objectValue`/`objMethod`/`objIndex`/`objBinary`.
 3. **클래스**: 멤버 함수, `this`, 생성자·소멸자(블록이 끝날 때 자동 호출), `public`/`private` 검사,
    초기화 목록. 구조체 메모리 모델을 그대로 쓰고 함수에 숨은 `this` 매개변수를 넣어요.
 4. **연산자 오버로딩**: `operator+`, `operator==`, `operator<<`(cout으로 출력)

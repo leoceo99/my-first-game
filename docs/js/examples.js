@@ -399,4 +399,42 @@ int main() {
 }
 `,
   },
+  {
+    lang: "cpp",
+    name: "C++ 할 일 목록",
+    about: "string, vector, getline, 참조로 넘기기",
+    code: `#include <iostream>
+#include <string>
+#include <vector>
+using namespace std;
+
+// 참조(&)로 받으면 복사하지 않고 원래 목록을 그대로 써요
+void show(const vector<string> &todos) {
+    cout << "--- 할 일 " << todos.size() << "개 ---" << endl;
+    for (int i = 0; i < todos.size(); i++) {
+        cout << i + 1 << ". " << todos[i] << endl;
+    }
+}
+
+int main() {
+    vector<string> todos;
+    string line;
+
+    cout << "할 일을 한 줄에 하나씩 쓰고, 다 쓰면 [입력 끝]을 누르세요." << endl;
+    while (getline(cin, line)) {
+        if (line.empty()) continue;
+        todos.push_back(line);
+    }
+
+    show(todos);
+
+    string longest = "";
+    for (const string &t : todos) {
+        if (t.size() > longest.size()) longest = t;
+    }
+    if (!todos.empty()) cout << "가장 긴 할 일: " << longest << endl;
+    return 0;
+}
+`,
+  },
 ];
