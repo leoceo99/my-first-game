@@ -33,7 +33,7 @@ const STD_TYPES = new Set(["map", "set", "pair", "unordered_map", "unordered_set
 
 // 아직 준비 중인 C++ 낱말들과 그 단계
 export const CPP_PENDING = {
-  class: 3, public: 3, private: 3, protected: 3, this: 3, virtual: 6, friend: 3, operator: 4, explicit: 3, mutable: 3,
+  virtual: 6, friend: 4, operator: 4,
   template: 5, typename: 5, try: 6, catch: 6, throw: 6, decltype: 5, dynamic_cast: 6,
 };
 
@@ -375,6 +375,13 @@ function cppTokens(tokens) {
         if (Object.hasOwn(STD_LATER, next.v)) throw later(next, next.v);
         out[out.length - 1] = { ...prev, v: `std::${next.v}`, raw: `std::${next.v}` };
         i++;
+        continue;
+      }
+      const after = tokens[i + 2];
+      if (prev && prev.k === "id" && next && next.k === "op" && next.v === "~" && after && after.k === "id") {
+        // Counter::~Counter (클래스 밖의 소멸자)
+        out[out.length - 1] = { ...prev, v: `${prev.v}::~${after.v}`, raw: `${prev.v}::~${after.v}` };
+        i += 2;
         continue;
       }
       if (prev && prev.k === "id" && next && next.k === "id") {

@@ -74,7 +74,8 @@ test("C++ 모드: 아직 없는 기능은 단계와 함께 안내해요", () => 
   const cases = [
     ["#include <map>\nint main() {}", /<map>.*다음 단계/],
     ["#include <iostream>\nusing namespace std;\nint main() { map<int, int> m; }", /std::map.*5단계/],
-    ["int main() { class A {}; }", /'class'.*3단계/],
+    ["struct V { int x; };\nV operator+(V a, V b) { return a; }\nint main() {}", /'operator'.*4단계/],
+    ["class A { friend void f(); };\nint main() {}", /'friend'.*4단계/],
     ["int main() { template <typename T> int x; }", /'template'.*5단계/],
     ["int main() { try { } catch (int e) { } }", /'try'.*6단계/],
   ];
@@ -259,17 +260,52 @@ for (const [name, code, want, inputs] of STAGE2B) {
   });
 }
 
+
+// ---------- 3단계: 클래스 ----------
+const H3 = "#include <iostream>\n#include <string>\n#include <vector>\nusing namespace std;\n";
+const STAGE3 = [
+  ["멤버 함수와 생성자", H3 + "class Counter {\n  int count;\npublic:\n  Counter() : count(0) {}\n  void add() { count++; }\n  int get() const { return count; }\n};\nint main() { Counter c; c.add(); c.add(); cout << c.get() << endl; }", "2\n"],
+  ["소멸자 순서", H3 + 'class T {\n  string name;\npublic:\n  T(string n) : name(n) { cout << "만듦 " << name << endl; }\n  ~T() { cout << "없앰 " << name << endl; }\n};\nint main() { T a("a"); { T b("b"); } T c("c"); cout << "끝" << endl; }', "만듦 a\n만듦 b\n없앰 b\n만듦 c\n끝\n없앰 c\n없앰 a\n"],
+  ["생성자 오버로딩, 기본 인자", H3 + "class P {\npublic:\n  int x, y;\n  P() : x(0), y(0) {}\n  P(int a, int b = 5) : x(a), y(b) {}\n};\nint main() { P a; P b(1); P c(2, 3); P d{4, 6}; P e = P(7, 8); cout << a.x << a.y << b.x << b.y << c.x << c.y << d.x << d.y << e.x << e.y << endl; }", "0015234678\n"],
+  ["this와 멤버 이름 가리기", H3 + "class P {\n  int x;\npublic:\n  P(int x) { this->x = x; }\n  int getX() { return x; }\n  P *self() { return this; }\n};\nint main() { P p(9); cout << p.getX() << p.self()->getX() << endl; }", "99\n"],
+  ["private 접근 오류", H3 + "class A { int secret = 1; };\nint main() { A a; cout << a.secret; }", "ERR"],
+  ["private 함수 오류", H3 + "class A { void hide() {} public: void show() { hide(); } };\nint main() { A a; a.show(); a.hide(); }", "ERR"],
+  ["struct는 기본 public", H3 + "struct S { int v = 3; int twice() { return v * 2; } };\nint main() { S s; cout << s.v << s.twice() << endl; }", "36\n"],
+  ["기본 멤버 값", H3 + "class Box {\npublic:\n  int w = 2, h = 3;\n  string name = \"상자\";\n  int area() const { return w * h; }\n};\nint main() { Box b; b.w = 5; cout << b.name << b.area() << endl; }", "상자15\n"],
+  ["클래스 밖 정의", H3 + "class Acc {\n  int bal;\npublic:\n  Acc(int b);\n  void dep(int m);\n  int get() const;\n  ~Acc();\n};\nAcc::Acc(int b) : bal(b) {}\nvoid Acc::dep(int m) { bal += m; }\nint Acc::get() const { return bal; }\nAcc::~Acc() { cout << \"bye\" << endl; }\nint main() { Acc a(10); a.dep(5); cout << a.get() << endl; }", "15\nbye\n"],
+  ["const 객체에 const 아닌 함수", H3 + "class A { public: int v = 1; void inc() { v++; } int get() const { return v; } };\nint main() { const A a; cout << a.get(); a.inc(); }", "ERR"],
+  ["const 함수에서 멤버 바꾸기", H3 + "class A { int v = 1; public: void bad() const { v = 2; } };\nint main() { A a; a.bad(); }", "ERR"],
+  ["static 멤버", H3 + "class Dog {\npublic:\n  static int count;\n  string name;\n  Dog(string n) : name(n) { count++; }\n  static int total() { return count; }\n};\nint Dog::count = 0;\nint main() { Dog a(\"a\"), b(\"b\"); cout << Dog::count << Dog::total() << a.total() << endl; }", "222\n"],
+  ["static 멤버 정의 빠짐", H3 + "class A { public: static int n; };\nint main() { cout << A::n; }", "ERR"],
+  ["객체 배열", H3 + "class C { public: int v; C() : v(7) {} };\nint main() { C arr[3]; arr[1].v = 1; cout << arr[0].v << arr[1].v << arr[2].v << endl; }", "717\n"],
+  ["vector<클래스>", H3 + "class P { public: int x; P(int a) : x(a) {} int dbl() const { return x * 2; } };\nint main() { vector<P> ps; ps.push_back(P(1)); ps.push_back(P(2)); int s = 0; for (const auto &p : ps) s += p.dbl(); cout << s << ps[1].x << endl; }", "62\n"],
+  ["new/delete와 소멸자", H3 + 'class R { public: int id; R(int i) : id(i) { cout << "R" << id; } ~R() { cout << "~R" << id; } };\nint main() { R *p = new R(1); R *q = new R(2); delete q; delete p; cout << endl; }', "R1R2~R2~R1\n"],
+  ["포인터로 멤버 함수", H3 + "class A { public: int v = 4; int get() { return v; } };\nint main() { A a; A *p = &a; p->v = 5; cout << p->get() << (*p).get() << endl; }", "55\n"],
+  ["멤버 함수에서 다른 멤버 함수", H3 + "class Calc { int acc = 0; public: Calc &add(int x) { acc += x; return *this; } int twice() { return get() * 2; } int get() { return acc; } };\nint main() { Calc c; c.add(1).add(2); cout << c.twice() << endl; }", "6\n"],
+  ["객체를 함수에 값/참조로", H3 + "class A { public: int v; A(int x) : v(x) {} };\nvoid byVal(A a) { a.v = 100; }\nvoid byRef(A &a) { a.v = 200; }\nint main() { A a(1); byVal(a); cout << a.v; byRef(a); cout << a.v << endl; }", "1200\n"],
+  ["멤버로 다른 클래스", H3 + "class Engine { public: int hp; Engine() : hp(100) {} };\nclass Car { public: Engine e; string name; Car(string n) : name(n) {} };\nint main() { Car c(\"차\"); cout << c.name << c.e.hp << endl; }", "차100\n"],
+  ["기본 생성자 없음", H3 + "class A { public: A(int x) {} };\nint main() { A a; }", "ERR"],
+  ["생성자 값 개수 틀림", H3 + "class A { public: A(int x) {} };\nint main() { A a(1, 2); }", "ERR"],
+  ["{ }로 private 멤버", H3 + "class A { int x; public: int get() { return x; } };\nint main() { A a{1}; }", "ERR"],
+  ["전역 객체 생성/소멸", H3 + 'class G { public: G() { cout << "G" << endl; } ~G() { cout << "~G" << endl; } };\nG g;\nint main() { cout << "main" << endl; }', "G\nmain\n~G\n"],
+  ["return 지역 객체 (복사 생략)", H3 + 'class T { public: int v; T(int x) : v(x) {} ~T() { cout << "~" << v; } };\nT make() { T t(3); return t; }\nint main() { T a = make(); cout << a.v; }', "3~3"],
+  ["반복문 안 객체", H3 + 'class T { public: int v; T(int x) : v(x) {} ~T() { cout << "~" << v; } };\nint main() { for (int i = 0; i < 3; i++) { T t(i); } cout << endl; }', "~0~1~2\n"],
+  ["this 바깥", H3 + "int main() { cout << this; }", "ERR"],
+  ["클래스 이름공간", H3 + "namespace shop { class Item { public: int price; Item(int p) : price(p) {} int sale() const; }; int Item::sale() const { return price / 2; } }\nint main() { shop::Item it(100); cout << it.sale() << endl; }", "50\n"],
+  ["값 대입은 멤버 복사", H3 + "class A { public: string s; vector<int> v; };\nint main() { A a; a.s = \"x\"; a.v.push_back(1); A b = a; b.s += \"y\"; b.v.push_back(2); cout << a.s << a.v.size() << b.s << b.v.size() << endl; }", "x1xy2\n"],
+  ["클래스 cin", H3 + "class S { public: string name; int score; void read() { cin >> name >> score; } void print() const { cout << name << \":\" << score << endl; } };\nint main() { S s; s.read(); s.print(); }", "민지:90\n", ["민지 90"]],
+  ["Counter 목표", "#include <iostream>\nclass Counter {\n    int count;\npublic:\n    Counter() : count(0) {}\n    ~Counter() { std::cout << \"끝 \" << count << \"\\n\"; }\n    void add() { count++; }\n};\nint main() { Counter c; c.add(); c.add(); }", "끝 2\n"],
+];
+for (const [name, code, want, inputs] of STAGE3) {
+  test(`C++ 3단계: ${name}`, () => {
+    const r = run(code, inputs);
+    if (want === "ERR") assert.equal(r.status, "error", r.out);
+    else ok(code, want, inputs);
+  });
+}
+
 // ---------- 앞으로의 단계: 목표 프로그램 ----------
 const TODO = [
-  [3, "클래스, 생성자, 소멸자", `#include <iostream>
-class Counter {
-    int count;
-public:
-    Counter() : count(0) {}
-    ~Counter() { std::cout << "끝 " << count << "\\n"; }
-    void add() { count++; }
-};
-int main() { Counter c; c.add(); c.add(); }`, "끝 2\n"],
   [4, "연산자 오버로딩", `#include <iostream>
 struct V { int x, y; V operator+(const V &o) const { return {x + o.x, y + o.y}; } };
 std::ostream &operator<<(std::ostream &os, const V &v) { return os << "(" << v.x << "," << v.y << ")"; }

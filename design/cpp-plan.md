@@ -39,8 +39,13 @@ C++ 코드의 대부분은 C 문법이라서, 단단한 C 실행기가 가장 �
    `vector<string>`, 구조체 원소. 값으로 넘기면 복사되고, 범위를 벗어나면 친절하게 알려 줘요.
    만든 곳: string/vector 값은 `js/c/runtime.js`의 `newString`/`newVector`(값 하나 = Store 하나, 읽을 때 복사),
    컴파일은 `js/c/compile.js`의 `objectValue`/`objMethod`/`objIndex`/`objBinary`.
-3. **클래스**: 멤버 함수, `this`, 생성자·소멸자(블록이 끝날 때 자동 호출), `public`/`private` 검사,
-   초기화 목록. 구조체 메모리 모델을 그대로 쓰고 함수에 숨은 `this` 매개변수를 넣어요.
+3. ✅ **클래스** (끝남): `class`/`struct`의 멤버 함수, `this`, 생성자(초기화 목록, 오버로딩, 기본 인자, `explicit`,
+   `= default`), 기본 멤버 값(`int count = 0;`), 소멸자(블록이 끝날 때, `delete`, 프로그램이 끝날 때 거꾸로 불러요.
+   `return 지역객체;`는 진짜 C++처럼 복사를 생략해요), `public`/`private`/`protected` 검사, `const` 멤버 함수와 const 객체 검사,
+   `static` 멤버 변수(클래스 밖 정의를 빠뜨리면 알려 줘요)와 함수, 클래스 밖 정의(`int A::get() const { … }`, `A::A(…) : … { }`,
+   `A::~A()`), 객체 배열, `vector<클래스>`, 멤버 객체, 이름공간 안의 클래스, `Counter(5)` 같은 이름 없는 객체.
+   아직 아닌 것: 사용자 복사 생성자·복사 대입(지금은 멤버를 그대로 복사해요), 이름 없는 임시 객체의 소멸자, `friend`(4단계).
+   만든 곳: `js/c/parser.js`의 `classBody`, `js/c/compile.js`의 `registerClasses`/`classInit`/`methodCall`/`ctorPrologue`/`destroyFn`.
 4. **연산자 오버로딩**: `operator+`, `operator==`, `operator<<`(cout으로 출력)
 5. **템플릿**: 함수 템플릿과 클래스 템플릿을 쓰는 타입마다 다시 컴파일(인스턴스화)해요.
    `std::vector<T>`, `std::pair`, `std::map`, `std::sort` 같은 STL을 이 위에 만들어요.

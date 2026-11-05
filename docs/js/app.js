@@ -206,7 +206,7 @@ const CPP_WORD_KEYS = [
   word("cout", "cout << "), word("cin", "cin >> "), word("endl", "endl"),
   { gap: true },
   word("int"), word("double"), word("char"), word("bool"), word("if"), word("else"), word("for"), word("while"),
-  word("return"), word("break", "break;"), word("void"), word("struct"),
+  word("return"), word("break", "break;"), word("void"), word("class"), word("public:", "public:\n"), word("string"), word("vector", "vector<"),
   { label: "#include", kind: "word", run: () => editor.insertText("#include <iostream>\nusing namespace std;\n") },
   { label: "main", kind: "fn", run: () => editor.insertText("int main() {\n    \n    return 0;\n}\n") },
   { gap: true },

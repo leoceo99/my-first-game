@@ -34,6 +34,7 @@ class Parser {
     this.cpp = dialect === "cpp";
     this.ns = []; // 지금 들어가 있는 이름공간들
     this.usingStd = false; // using namespace std; 뒤인가요?
+    this.classes = []; // C++ 클래스들 (멤버 함수가 있는 구조체)
     this.usingNames = new Set();
     this.tags = new Map(); // struct 이름들
     this.typedefs = [new Map()]; // typedef 이름들 (블록마다 한 층)
@@ -107,7 +108,7 @@ class Parser {
   isTypeStart(tok = this.cur) {
     if (tok.k !== "id") return false;
     return BASE_WORDS.has(tok.v) || QUALIFIERS.has(tok.v) || STORAGE.has(tok.v) || TAG_WORDS.has(tok.v) || this.isTypedefName(tok.v) ||
-      (this.cpp && (tok.v === "auto" || tok.v === "constexpr" || this.stdTypeName(tok) !== null));
+      (this.cpp && (["auto", "constexpr", "class", "explicit", "mutable"].includes(tok.v) || this.stdTypeName(tok) !== null));
   }
 
   /** std::string, std::vector (using namespace std; 뒤라면 string, vector) */
@@ -161,7 +162,9 @@ class Parser {
         if (v === "const") isConst = true;
       } else if (BASE_WORDS.has(v) && !named) {
         words.push(v);
-      } else if (v === "struct" || v === "union") {
+      } else if (this.cpp && (v === "explicit" || v === "mutable" || v === "inline")) {
+        // C++ 낱말 중 실행에는 영향이 없는 것들
+      } else if (v === "struct" || v === "union" || (this.cpp && v === "class")) {
         if (named || words.length) throw compileError(this.cur.line, "타입이 두 번 적혀 있어요");
         named = this.structSpec();
         continue;
@@ -192,7 +195,7 @@ class Parser {
     const isUnion = kw.v === "union";
     let tag = null;
     if (this.cur.k === "id" && !KEYWORDS.has(this.cur.v)) tag = this.next().v;
-    const key = `${kw.v} ${tag}`;
+    const key = `${kw.v === "class" ? "struct" : kw.v} ${tag}`; // class A 와 struct A 는 같은 것
     let t = tag ? this.tags.get(key) : null;
     const fresh = () => ({ k: "struct", tag, isUnion, fields: [], complete: false, line: kw.line });
     if (!this.is("{")) {
@@ -213,6 +216,7 @@ class Parser {
       }
     }
     this.next();
+    if (this.cpp && !isUnion) return this.classBody(t, kw);
     const fields = [];
     while (!this.is("}")) {
       if (this.cur.k === "eof") throw compileError(kw.line, `${kw.line}번째 줄의 struct { 가 닫히지 않았어요`);
@@ -237,6 +241,137 @@ class Parser {
     t.fields = fields;
     t.complete = true;
     return t;
+  }
+
+  /**
+   * C++ 클래스(구조체)의 몸통: 멤버 변수, 멤버 함수, 생성자, 소멸자, public:/private:, static 멤버.
+   * 멤버 함수의 몸통은 여기서 읽어 두고, 컴파일러가 나중에 클래스 안의 함수로 만들어요.
+   */
+  classBody(t, kw) {
+    const tag = t.tag;
+    let access = kw.v === "class" ? "private" : "public";
+    const fields = [];
+    const methods = [];
+    const statics = [];
+    const enums = [];
+    t.isClass = kw.v === "class";
+    t.qname = tag ? this.nsName(tag) : null;
+    const qualifiers = () => {
+      // 매개변수 뒤의 const, noexcept, override …
+      let isConst = false;
+      for (;;) {
+        if (this.accept("const")) isConst = true;
+        else if (this.is("noexcept") || this.is("override") || this.is("final")) this.next();
+        else return isConst;
+      }
+    };
+    const body = (m) => {
+      if (this.accept(";")) return m;
+      if (this.accept("=")) {
+        const what = this.next();
+        if (what.v === "default") m.defaulted = true;
+        else if (what.v === "delete") m.deleted = true;
+        else throw compileError(what.line, "= 0 (순수 가상 함수)은 C++ 6단계에서 지원해요");
+        this.expect(";");
+        return m;
+      }
+      if (m.kind === "ctor" && this.accept(":")) m.inits = this.ctorInits();
+      if (!this.is("{")) throw compileError(this.cur.line, `${m.name}의 몸통 { } 이나 ; 가 와야 해요`);
+      m.body = this.block();
+      return m;
+    };
+    while (!this.is("}")) {
+      const line = this.cur.line;
+      if (this.cur.k === "eof") throw compileError(kw.line, `${kw.line}번째 줄의 ${kw.v} { 가 닫히지 않았어요`);
+      if (["public", "private", "protected"].includes(this.cur.v) && this.is(":", this.peek())) {
+        access = this.next().v;
+        this.next();
+        continue;
+      }
+      if (this.accept(";")) continue;
+      while (this.is("explicit") || this.is("inline")) this.next();
+      if (this.is("~")) {
+        this.next();
+        const name = this.next();
+        if (name.v !== tag) throw compileError(line, `소멸자 이름은 ~${tag} 이어야 해요`);
+        const ps = this.params();
+        qualifiers();
+        methods.push(body({ kind: "dtor", name: `~${tag}`, params: ps, access, line }));
+        continue;
+      }
+      if (tag && this.cur.k === "id" && this.cur.v === tag && this.is("(", this.peek())) {
+        this.next();
+        const ps = this.params();
+        qualifiers();
+        methods.push(body({ kind: "ctor", name: tag, params: ps, access, line }));
+        continue;
+      }
+      const specs = this.declSpecs();
+      if (!specs) throw compileError(line, `'${show(this.cur)}'는 ${kw.v} 안에 올 수 없어요`, "멤버 변수나 멤버 함수, public: 같은 것이 와요.");
+      enums.push(...specs.enums);
+      if (this.accept(";")) continue;
+      let ended = false; // 멤버 함수가 스스로 ; 나 } 까지 읽었나요?
+      do {
+        if (this.is(":")) {
+          this.next();
+          fields.push({ name: null, type: specs.type, line: this.cur.line, bits: this.conditional(), access });
+          continue;
+        }
+        const d = this.declarator(specs.type, false, specs.isConst);
+        if (d.type.k === "func") {
+          const isConst = qualifiers();
+          const m = { kind: "method", name: d.name, type: d.type, isConst, isStatic: specs.storage === "static", access, line: d.line };
+          methods.push(body(m));
+          ended = true;
+          break;
+        }
+        if (specs.storage === "static") {
+          const init = this.accept("=") ? this.initializer() : this.is("{") ? this.initializer() : null;
+          statics.push({ name: d.name, type: d.type, init, isConst: d.isConst, access, line: d.line });
+          continue;
+        }
+        if (specs.storage) throw compileError(d.line, `${kw.v} 멤버에는 ${specs.storage}를 쓸 수 없어요`);
+        if (this.accept(":")) d.bits = this.conditional();
+        if (this.accept("=")) d.dflt = this.initializer(); // 기본 멤버 값: int count = 0;
+        else if (this.is("{")) d.dflt = this.initializer();
+        if (fields.some((f) => f.name === d.name)) throw compileError(d.line, `${kw.v}에 '${d.name}' 멤버가 두 개 있어요`);
+        fields.push({ ...d, access });
+      } while (this.accept(","));
+      if (!ended) this.expect(";");
+    }
+    this.next();
+    if (fields.filter((f) => f.name).length === 0 && methods.length === 0 && statics.length === 0 && !t.isClass) {
+      throw compileError(kw.line, "빈 구조체는 만들 수 없어요");
+    }
+    t.fields = fields;
+    t.methods = methods;
+    t.statics = statics;
+    t.classEnums = enums;
+    t.complete = true;
+    t.isCppClass = true;
+    this.classes.push(t);
+    return t;
+  }
+
+  /** 생성자의 초기화 목록: Counter() : count(0), name("x") { } */
+  ctorInits() {
+    const inits = [];
+    do {
+      const tok = this.next();
+      if (tok.k !== "id") throw compileError(tok.line, "초기화 목록에는 멤버 이름이 와요", "예: Point(int a) : x(a), y(0) { }");
+      let args;
+      if (this.is("{")) args = this.initializer().items;
+      else {
+        this.expect("(", `예: ${tok.v}(값)`);
+        args = [];
+        if (!this.is(")")) {
+          do args.push(this.is("{") ? this.initializer() : this.assignment()); while (this.accept(","));
+        }
+        this.expect(")");
+      }
+      inits.push({ name: tok.v, args, line: tok.line });
+    } while (this.accept(","));
+    return inits;
   }
 
   /** 지금 이름공간 안이면 geo::area 처럼 앞에 붙여요 */
@@ -463,8 +598,25 @@ class Parser {
       if (this.is("_Static_assert")) { items.push(this.staticAssert()); continue; }
       if (this.cpp && this.is("using")) { items.push(this.usingDecl()); continue; }
       if (this.cpp && this.is("namespace")) { this.namespaceBlock(items); continue; }
+      if (this.cpp && this.cur.k === "id" && /::~?\w+$/.test(this.cur.v) && this.is("(", this.peek())) {
+        const parts = this.cur.v.split("::");
+        const last = parts[parts.length - 1];
+        const owner = parts[parts.length - 2];
+        if (last === owner || last === `~${owner}`) {
+          // 클래스 밖에서 만드는 생성자/소멸자: Counter::Counter(int c) : count(c) { }
+          const tok = this.next();
+          const ps = this.params();
+          let inits = null;
+          if (last === owner && this.accept(":")) inits = this.ctorInits();
+          if (!this.is("{")) throw compileError(tok.line, `${tok.v}의 몸통 { } 이 필요해요`);
+          items.push({ k: "func", name: this.nsName(tok.v), type: func(T.void, ps.params, ps.variadic), body: this.block(), line: tok.line, inits, ns: this.nsPath(), special: last === owner ? "ctor" : "dtor" });
+          continue;
+        }
+      }
       if (this.ns.length && this.is("}")) return { items, builtinTypes: this.builtinTypes };
+      const classesBefore = this.classes.length;
       const specs = this.declSpecs();
+      const newClasses = () => this.classes.slice(classesBefore);
       if (!specs) {
         if (this.cur.k === "id" && this.is("(", this.peek())) {
           throw compileError(line, `함수 ${this.cur.v} 앞에 돌려줄 값의 타입이 필요해요`, `예: int ${this.cur.v}(void) { ... }`);
@@ -472,15 +624,24 @@ class Parser {
         throw compileError(line, `'${show(this.cur)}'는 여기에 올 수 없어요`, "함수나 변수 선언은 int, double 같은 타입으로 시작해요.");
       }
       if (this.accept(";")) {
-        if (specs.enums.length) items.push({ k: "decl", items: [], enums: specs.enums, line });
+        if (specs.enums.length || newClasses().length) items.push({ k: "decl", items: [], enums: specs.enums, line, classes: newClasses() });
         continue;
       }
       const d = this.declarator(specs.type, false, specs.isConst);
       while (this.is("__attribute__")) this.skipAttribute();
+      let constMethod = false;
+      if (this.cpp && d.type.k === "func" && d.name && d.name.includes("::")) {
+        // 클래스 밖의 멤버 함수: int Counter::get() const { … }
+        while (this.is("const") || this.is("noexcept") || this.is("override")) {
+          if (this.cur.v === "const") constMethod = true;
+          this.next();
+        }
+      }
       if (d.type.k === "func" && this.is("{")) {
-        items.push({ k: "func", name: this.nsName(d.name), type: d.type, body: this.block(), line: d.line, storage: specs.storage, ns: this.nsPath() });
+        items.push({ k: "func", name: this.nsName(d.name), type: d.type, body: this.block(), line: d.line, storage: specs.storage, ns: this.nsPath(), constMethod });
       } else {
         const decl = this.declRest(specs, d);
+        decl.classes = newClasses();
         if (this.ns.length) {
           decl.ns = this.nsPath();
           for (const it of decl.items) it.name = this.nsName(it.name);
@@ -488,7 +649,7 @@ class Parser {
         items.push(decl);
       }
     }
-    return { items, builtinTypes: this.builtinTypes };
+    return { items, builtinTypes: this.builtinTypes, classes: this.classes };
   }
 
   declRest(specs, first) {
@@ -522,7 +683,11 @@ class Parser {
 
   /** 문장 자리의 선언 (int x; / struct P p; / enum {...}; 처럼 이름 없는 것도) */
   localDeclaration() {
+    const before = this.classes.length;
     const specs = this.declSpecs();
+    if (this.classes.length > before && this.classes.slice(before).some((c) => c.methods.length || c.statics.length)) {
+      throw compileError(specs.line, "함수 안에서는 멤버 함수가 있는 클래스를 만들 수 없어요", "클래스는 main 위쪽(함수 밖)에 만들어 주세요.");
+    }
     if (this.accept(";")) return { k: "decl", items: [], enums: specs.enums, line: specs.line };
     return this.declRest(specs, this.declarator(specs.type, false, specs.isConst));
   }
@@ -877,6 +1042,18 @@ class Parser {
       const type = this.objType();
       if (this.is("{")) return { k: "construct", type, list: this.initializer(), line: tok.line };
       this.expect("(", `예: ${type.k === "string" ? "string(\"abc\")" : "vector<int>(3, 0)"}`);
+      const args = [];
+      if (!this.is(")")) {
+        do args.push(this.is("{") ? this.initializer() : this.assignment()); while (this.accept(","));
+      }
+      this.expect(")");
+      return { k: "construct", type, args, line: tok.line };
+    }
+    if (this.cpp && tok.k === "id" && this.isTypedefName(tok.v) && this.is("(", this.peek())) {
+      // Counter(5): 이름 없는 객체를 만들어요 (int8_t(x) 같은 타입 이름이면 형 변환)
+      this.next();
+      const type = this.typedefType(tok.v);
+      this.next();
       const args = [];
       if (!this.is(")")) {
         do args.push(this.is("{") ? this.initializer() : this.assignment()); while (this.accept(","));

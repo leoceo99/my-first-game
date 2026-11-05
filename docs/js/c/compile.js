@@ -214,6 +214,7 @@ export class Compiler {
     this.usingNames = new Set(); // using std::cout;
     this.usingNs = new Set(); // using namespace geo;
     this.ns = ""; // 지금 컴파일하는 코드가 들어 있는 이름공간
+    this.classMap = new Map(); // 클래스 이름 → 클래스 타입
     this.funcs = new Map();
     this.globalScope = { vars: new Map(), parent: null };
     this.scope = this.globalScope;
@@ -383,6 +384,7 @@ export class Compiler {
         return promo ? 1 : 2;
       }
       if (isPtr(to) && (V.isNull || (isPtr(from) && (sameType(from.to, to.to) || isVoid(to.to))))) return 2;
+      if (to.k === "string" && isPtr(from) && isCharLike(from.to)) return 3; // "글자" → string (사용자 정의 변환)
       return Infinity;
     };
     const viable = [];
@@ -417,8 +419,10 @@ export class Compiler {
       if (!isInt(N.t)) throw compileError(line, "new T[개수]의 개수는 정수여야 해요");
       const zero = Boolean(node.args) || Boolean(node.list);
       if (node.args && node.args.length) throw compileError(line, "new T[n]( ) 의 괄호 안에는 아무것도 넣지 않아요");
+      if (node.list && this.needsConstruct(type)) throw compileError(line, "new로 만든 객체 배열에는 { } 처음 값을 쓸 수 없어요");
       const items = node.list ? node.list.items.map((x) => this.conv(this.value(this.expr(x), line), type, line, "new 배열의 처음 값")) : [];
       const zeros = zerosOf(type);
+      const make = this.needsConstruct(type) ? this.constructInit(type, null, line, "new") : null;
       return {
         t: ptr(type),
         ev: (f) => {
@@ -428,6 +432,10 @@ export class Compiler {
           const st = new Store(n * unit, "new 메모리", arr(type, n));
           if (zero || zeros.some((z) => z === null)) for (let i = 0; i < n * unit; i++) st.cells[i] = zeros[i % unit];
           items.forEach((E, i) => { st.cells[i * unit] = E.ev(f); });
+          if (make) {
+            for (let i = 0; i < n * unit; i++) st.cells[i] = zeros[i % unit];
+            for (let i = 0; i < n; i++) make(f, new Ptr(st, i * unit));
+          }
           st.heap = true;
           st.newKind = "array";
           st.elemSize = type.size;
@@ -436,15 +444,16 @@ export class Compiler {
       };
     }
     let init = null;
-    if (node.list) init = this.initializer(type, node.list, line, "new");
-    else if (node.args && node.args.length > 1) throw compileError(line, `new ${typeName(type)}(…)에 값이 너무 많아요`, "생성자는 C++ 3단계(클래스)에서 지원해요.");
+    if (isStruct(type) && type.isCppClass) init = this.makeInit(type, node.list || { k: "ctor", args: node.args || [], line }, line, "new");
+    else if (node.list) init = this.initializer(type, node.list, line, "new");
+    else if (node.args && node.args.length > 1) throw compileError(line, `new ${typeName(type)}(…)에 값이 너무 많아요`);
     else if (node.args && node.args.length === 1) init = this.initializer(type, node.args[0], line, "new");
     const zeros = node.args ? zerosOf(type) : null;
     return {
       t: ptr(type),
       ev: (f) => {
         const st = new Store(unit, "new 메모리", type);
-        if (zeros) st.cells = zeros.slice();
+        if (zeros || hasObj(type)) st.cells = zerosOf(type).slice();
         if (init) init(f, st);
         st.heap = true;
         st.newKind = "single";
@@ -459,6 +468,9 @@ export class Compiler {
     const P = this.value(this.expr(node.e), line);
     if (!isPtr(P.t)) throw compileError(line, "delete 뒤에는 new로 만든 주소(포인터)가 와야 해요");
     const want = node.array ? "array" : "single";
+    const elem = P.t.to;
+    const destroy = this.cpp && this.hasDtor(elem) ? this.destroyFn(elem, line) : null;
+    const unit = destroy ? cells(elem) : 1;
     return {
       t: T.void,
       ev: (f) => {
@@ -472,6 +484,11 @@ export class Compiler {
         if (st.newKind !== want) {
           throw runtimeError(line, want === "array" ? "new로 만든 하나짜리를 delete[]로 지웠어요" : "new[]로 만든 배열을 delete로 지웠어요",
             want === "array" ? "new T 는 delete p; 로 지워요." : "new T[n] 은 delete[] p; 로 지워요.");
+        }
+        if (destroy) {
+          // delete: 소멸자를 부르고 나서 메모리를 돌려줘요 (배열은 뒤에서부터)
+          const count = st.newKind === "array" ? st.cells.length / unit : 1;
+          for (let i = count - 1; i >= 0; i--) destroy(new Ptr(st, i * unit));
         }
         st.freed = true;
       },
@@ -588,6 +605,358 @@ export class Compiler {
     };
   }
 
+  // ---------- C++ 3단계: 클래스 ----------
+  sameParams(a, b) {
+    return a.params.length === b.params.length &&
+      a.params.every((p, i) => sameType(p.type, b.params[i].type) && (p.type.k === "ref") === (b.params[i].type.k === "ref"));
+  }
+
+  /** 함수 밖이 아닌 블록 안(지역)에서만 이름을 찾아요 */
+  lookupLocal(name) {
+    for (let s = this.scope; s && s !== this.globalScope; s = s.parent) if (s.vars.has(name)) return s.vars.get(name);
+    return null;
+  }
+
+  /** 이 타입의 값을 만들 때 생성자를 불러야 하나요? */
+  needsConstruct(t) {
+    if (isArr(t)) return this.needsConstruct(t.of);
+    return Boolean(isStruct(t) && t.ctors && t.ctors.length);
+  }
+
+  /** 이 타입의 값이 없어질 때 소멸자를 불러야 하나요? */
+  hasDtor(t) {
+    if (isArr(t)) return this.hasDtor(t.of);
+    if (!isStruct(t) || !t.isCppClass) return false;
+    if (t.dtorMemo === undefined) {
+      t.dtorMemo = false;
+      t.dtorMemo = Boolean(t.dtorFi) || t.fields.some((f) => this.hasDtor(f.type));
+    }
+    return t.dtorMemo;
+  }
+
+  /** 값을 없애는 함수: 소멸자를 부르고, 멤버도 거꾸로 없애요 */
+  destroyFn(t, line) {
+    if (isArr(t)) {
+      const inner = this.destroyFn(t.of, line);
+      const unit = cells(t.of);
+      return (p) => { for (let i = t.len - 1; i >= 0; i--) inner(new Ptr(p.store, p.off + i * unit)); };
+    }
+    const members = t.fields.filter((f) => this.hasDtor(f.type)).map((f) => [f.off, this.destroyFn(f.type, line)]).reverse();
+    const d = t.dtorFi;
+    const rt = this.rt;
+    return (p) => {
+      if (d) {
+        const ret = rt.ret;
+        this.invoke(d, [p], line, false);
+        rt.ret = ret;
+      }
+      for (const [off, fn] of members) fn(new Ptr(p.store, p.off + off));
+    };
+  }
+
+  /** 파서가 찾은 클래스들의 멤버 함수, 생성자, 소멸자, static 멤버를 등록해요 */
+  registerClasses(classes) {
+    for (const cls of classes) {
+      const line = cls.line;
+      this.layout(cls, line);
+      const q = cls.qname || cls.tag;
+      if (q) this.classMap.set(q, cls);
+      cls.methodMap = new Map();
+      cls.ctors = [];
+      cls.dtorFi = null;
+      cls.staticFns = new Set();
+      cls.staticNames = new Set();
+      cls.allFis = [];
+      const ns = q && q.includes("::") ? q.slice(0, q.lastIndexOf("::")) : "";
+      this.declareEnums(cls.classEnums);
+      for (const m of cls.methods) {
+        if (m.deleted) continue;
+        if (m.kind === "method" && m.isStatic) {
+          const def = m.body ? { type: m.type, body: m.body, line: m.line, ns } : null;
+          const fi = this.declareFunction({ name: `${q}::${m.name}`, type: m.type, line: m.line, ns }, def);
+          Object.assign(fi, { cls, isStatic: true, access: m.access, kind: "method" });
+          cls.staticFns.add(m.name);
+          cls.allFis.push(fi);
+          continue;
+        }
+        const raw = m.kind === "method" ? m.type : func(T.void, m.params.params, m.params.variadic);
+        const type = this.resolveType(raw, { line: m.line });
+        const name = m.kind === "method" ? `${q}::${m.name}` : m.kind === "ctor" ? `${q}::${cls.tag}` : `${q}::~${cls.tag}`;
+        const thisType = ptr(cls);
+        if (m.isConst) thisType.toConst = true;
+        const fi = {
+          name, type, def: null, line: m.line, body: null, slotCount: 0, locals: [], params: [],
+          cls, kind: m.kind, access: m.access, isConstMethod: Boolean(m.isConst), thisType, ns,
+        };
+        fi.ref = new FnRef(fi);
+        if (m.body || m.defaulted) fi.def = { type: raw, body: m.body || { k: "block", body: [], line: m.line }, line: m.line, ns, inits: m.inits || [] };
+        let group;
+        if (m.kind === "ctor") group = cls.ctors;
+        else if (m.kind === "dtor") {
+          if (cls.dtorFi) throw compileError(m.line, `소멸자 ~${cls.tag}는 하나만 만들 수 있어요`);
+          if (type.params.length) throw compileError(m.line, "소멸자에는 매개변수를 쓸 수 없어요");
+          cls.dtorFi = fi;
+          group = [];
+        } else {
+          if (!cls.methodMap.has(m.name)) cls.methodMap.set(m.name, []);
+          group = cls.methodMap.get(m.name);
+          if (cls.fields.some((f) => f.name === m.name)) throw compileError(m.line, `'${m.name}'는 이미 멤버 변수 이름이에요`);
+        }
+        if (group.some((o) => this.sameParams(o.type, type) && o.isConstMethod === fi.isConstMethod)) {
+          throw compileError(m.line, `${name}(…)를 두 번 선언했어요`, "매개변수 타입이 달라야 같은 이름으로 여러 개 만들 수 있어요.");
+        }
+        group.push(fi);
+        cls.allFis.push(fi);
+      }
+      // 생성자가 없어도 기본 멤버 값이나 생성자가 있는 멤버가 있으면, 보이지 않는 기본 생성자를 만들어요
+      if (!cls.ctors.length && cls.fields.some((f) => f.dflt || this.needsConstruct(f.type) || f.type.k === "ref")) {
+        const fi = {
+          name: `${q}::${cls.tag}`, type: func(T.void, []), line, body: null, slotCount: 0, locals: [], params: [],
+          cls, kind: "ctor", access: "public", implicit: true, thisType: ptr(cls), ns,
+          def: { type: func(T.void, []), body: { k: "block", body: [], line }, line, ns, inits: [] },
+        };
+        fi.ref = new FnRef(fi);
+        cls.ctors.push(fi);
+        cls.allFis.push(fi);
+      }
+      for (const sm of cls.statics) {
+        const gname = `${q}::${sm.name}`;
+        cls.staticNames.add(sm.name);
+        if (sm.init) {
+          this.declaration({ k: "decl", items: [{ name: gname, type: sm.type, init: sm.init, line: sm.line, isConst: sm.isConst, storage: null }], enums: [], line: sm.line }, true);
+        } else {
+          const t = this.resolveType(sm.type, { line: sm.line });
+          const st = new Store(cells(t), gname, t);
+          st.cells = zerosOf(t).slice();
+          const info = { name: gname, type: t, store: st, line: sm.line, global: true, externDecl: true, staticMember: true, isConst: sm.isConst };
+          this.globalScope.vars.set(gname, info);
+          this.globals.push(info);
+        }
+      }
+    }
+  }
+
+  /** 클래스 밖에서 만든 멤버 함수(Counter::add)를 클래스 안의 선언과 이어 줘요. 클래스 함수가 아니면 null */
+  attachClassMethod(item) {
+    const at = item.name.lastIndexOf("::");
+    if (at < 0) return null;
+    const owner = item.name.slice(0, at);
+    const member = item.name.slice(at + 2);
+    const cls = this.classMap.get(owner) || (item.ns ? this.classMap.get(`${item.ns}::${owner}`) : null);
+    if (!cls) return null;
+    if (cls.staticFns.has(member)) return null; // static 함수는 보통 함수처럼 이어져요
+    const type = this.resolveType(item.type, { line: item.line });
+    let group;
+    let what;
+    if (member === cls.tag) { group = cls.ctors.filter((c) => !c.implicit); what = "생성자"; }
+    else if (member === `~${cls.tag}`) { group = cls.dtorFi ? [cls.dtorFi] : []; what = "소멸자"; }
+    else { group = cls.methodMap.get(member) || []; what = "멤버 함수"; }
+    const fi = group.find((c) => this.sameParams(c.type, type) && (c.kind !== "method" || c.isConstMethod === Boolean(item.constMethod)));
+    if (!fi) {
+      throw compileError(item.line, `클래스 ${owner} 안에 이 ${what} ${member}(…)의 선언이 없어요`,
+        `클래스 안에 먼저 선언해 주세요. (매개변수 타입과 const가 같아야 해요)`);
+    }
+    if (fi.kind === "method" && !sameType(fi.type.ret, type.ret)) throw compileError(item.line, `${item.name}의 돌려주는 타입이 클래스 안의 선언과 달라요`);
+    if (fi.def) throw compileError(item.line, `${item.name}를 두 번 만들었어요`, `${fi.def.line}번째 줄에 이미 있어요.`);
+    fi.def = { type: item.type, body: item.body, line: item.line, ns: item.ns, inits: item.inits || [] };
+    fi.defItem = item;
+    return fi;
+  }
+
+  /** 생성자 몸통 앞에서 멤버들을 차례대로 준비해요: 초기화 목록 → 기본 멤버 값 → 기본 생성자 */
+  ctorPrologue(fi, inits, line) {
+    const cls = fi.cls;
+    const rt = this.rt;
+    const byName = new Map();
+    for (const it of inits || []) {
+      if (!cls.fields.some((f) => f.name === it.name)) {
+        throw compileError(it.line, `초기화 목록의 '${it.name}'는 ${typeName(cls)}의 멤버가 아니에요`, `있는 멤버: ${cls.fields.map((f) => f.name).join(", ")}`);
+      }
+      if (byName.has(it.name)) throw compileError(it.line, `초기화 목록에 '${it.name}'가 두 번 나왔어요`);
+      byName.set(it.name, it);
+    }
+    const steps = [];
+    for (const field of cls.fields) {
+      const it = byName.get(field.name);
+      let node = null;
+      if (it) node = { k: "ctor", args: it.args, line: it.line };
+      else if (field.dflt) node = field.dflt;
+      else if (!this.needsConstruct(field.type)) {
+        if (field.type.k === "ref") throw compileError(line, `참조 멤버 '${field.name}'는 초기화 목록에서 정해야 해요`, `예: ${cls.tag}(int &x) : ${field.name}(x) { }`);
+        continue;
+      }
+      const step = this.fieldInit(field, node, it ? it.line : line);
+      if (step) steps.push(step);
+    }
+    return (f) => {
+      const self = f[0].cells[0];
+      for (const step of steps) step(f, self);
+    };
+  }
+
+  /** 멤버 하나를 처음 값으로 채우는 함수 (f, 객체 주소) */
+  fieldInit(field, node, line) {
+    const rt = this.rt;
+    const type = field.type;
+    const what = `멤버 '${field.name}'`;
+    const at = (self) => new Ptr(self.store, self.off + field.off);
+    if (type.k === "ref") {
+      const args = node && node.k === "ctor" ? node.args : node ? [node] : [];
+      if (args.length !== 1) throw compileError(line, `${what}(참조)에는 값 하나를 넣어요`);
+      const bind = this.bindRef(type, this.expr(args[0]), line, what);
+      return (f, self) => { self.store.cells[self.off + field.off] = bind(f); };
+    }
+    if ((isStruct(type) && type.isCppClass) || (isArr(type) && this.needsConstruct(type))) {
+      const c = this.constructInit(type, node, line, field.name);
+      return c ? (f, self) => c(f, at(self)) : null;
+    }
+    if (isObj(type)) {
+      const ev = this.objectValue(type, node, line, field.name);
+      return (f, self) => { self.store.cells[self.off + field.off] = ev(f); };
+    }
+    if (node && node.k === "ctor") {
+      if (node.args.length === 0) {
+        const zeros = zerosOf(type);
+        return (f, self) => { for (let i = 0; i < zeros.length; i++) self.store.cells[self.off + field.off + i] = zeros[i]; };
+      }
+      if (node.args.length !== 1 || isStruct(type) || isArr(type)) throw compileError(line, `${what}의 처음 값이 맞지 않아요`);
+      node = node.args[0];
+    }
+    const init = this.initializer(type, node, line, field.name);
+    const n = cells(type);
+    return (f, self) => {
+      const tmp = new Store(n, field.name, type);
+      init(f, tmp);
+      for (let i = 0; i < n; i++) self.store.cells[self.off + field.off + i] = tmp.cells[i];
+    };
+  }
+
+  /** 클래스(또는 클래스 배열)를 처음 값으로 만드는 함수 (f, 주소). 할 일이 없으면 null */
+  constructInit(type, init, line, name) {
+    if (isArr(type)) {
+      const items = init ? (init.k === "initlist" ? init.items : null) : [];
+      if (!items) throw compileError(line, `배열 '${name}'의 처음 값은 { }로 감싸야 해요`);
+      if (items.length > type.len) throw compileError(line, `배열 '${name}'에 처음 값이 너무 많아요`);
+      const unit = cells(type.of);
+      const per = [];
+      for (let i = 0; i < type.len; i++) per.push(this.constructInit(type.of, items[i] || null, line, `${name}[${i}]`));
+      if (per.every((x) => !x)) return null;
+      return (f, p) => { for (let i = 0; i < per.length; i++) if (per[i]) per[i](f, new Ptr(p.store, p.off + i * unit)); };
+    }
+    if (isStruct(type) && type.isCppClass) return this.classInit(type, init, line, name);
+    const plain = this.initializer(type, init, line, name);
+    if (!plain) return null;
+    const n = cells(type);
+    const rt = this.rt;
+    return (f, p) => { const tmp = new Store(n, name, type); plain(f, tmp); rt.storeStruct(p, tmp.cells, line); };
+  }
+
+  /** 클래스 객체 하나 만들기: 생성자 고르기, { } 로 바로 넣기, 같은 타입 값 복사 */
+  classInit(cls, init, line, name) {
+    this.layout(cls, line);
+    const rt = this.rt;
+    const user = (cls.ctors || []).filter((c) => !c.implicit);
+    const implicit = (cls.ctors || []).find((c) => c.implicit);
+    if (init && init.k !== "initlist" && init.k !== "ctor") {
+      const V = this.value(this.expr(init), line);
+      if (sameType(V.t, cls)) {
+        const ev = V.ev;
+        return (f, p) => rt.storeStruct(p, ev(f), line);
+      }
+      if (!user.length) throw compileError(line, `${typeName(cls)}에 ${friendlyType(V.t)}를 넣을 수 없어요`);
+      init = { k: "ctor", args: [init], line };
+    }
+    if (init && init.k === "initlist" && !user.length) {
+      const priv = cls.fields.find((f) => f.access && f.access !== "public");
+      if (priv) {
+        throw compileError(line, `${typeName(cls)}에는 private 멤버('${priv.name}')가 있어서 { }로 바로 값을 넣을 수 없어요`,
+          `생성자를 만들어서 값을 받아요. 예: ${cls.tag}(int a) : ${priv.name}(a) { }`);
+      }
+      const agg = this.initializer(cls, init, line, name);
+      const listed = init.items.length;
+      const later = cls.fields.slice(listed).filter((fl) => fl.dflt || this.needsConstruct(fl.type)).map((fl) => this.fieldInit(fl, fl.dflt || null, line)).filter(Boolean);
+      const n = cells(cls);
+      return (f, p) => {
+        const tmp = new Store(n, name, cls);
+        agg(f, tmp);
+        rt.storeStruct(p, tmp.cells, line);
+        for (const step of later) step(f, p);
+      };
+    }
+    const args = !init ? [] : init.k === "ctor" ? init.args : init.items;
+    if (!user.length) {
+      if (args.length) throw compileError(line, `${typeName(cls)}에는 생성자가 없어서 (값)으로 만들 수 없어요`, "생성자를 만들거나 { } 로 값을 넣어요.");
+      if (!implicit) return null;
+      return (f, p) => { this.invoke(implicit, [p], line, false); };
+    }
+    const pre = args.map((a) => (a.k === "initlist" ? { t: { k: "initlist" }, initlist: true } : this.expr(a)));
+    if (args.length === 0 && !user.some((c) => c.type.params.every((q) => q.dflt))) {
+      throw compileError(line, `${typeName(cls)}에는 값 없이 부를 수 있는 기본 생성자 ${cls.tag}()가 없어요`,
+        `${name ? `'${name}'를 만들 때 ` : ""}괄호 안에 값을 넣거나, 클래스에 ${cls.tag}() { } 를 만들어 주세요.`);
+    }
+    const fi = this.pickOverload(user, pre, { line, args }, `${cls.tag} 생성자`);
+    if (fi.access !== "public" && !(this.fn && this.fn.cls === cls)) {
+      throw compileError(line, `${cls.tag}의 이 생성자는 ${fi.access}라서 클래스 밖에서 쓸 수 없어요`);
+    }
+    const stack = [];
+    const call = this.callWith(fi.type, { line, args, unused: true }, `${cls.tag} 생성자`,
+      (f, vals, used, types) => this.invoke(fi, [stack[stack.length - 1], ...vals], line, false, types), fi, pre);
+    return (f, p) => {
+      stack.push(p);
+      try { call.ev(f); } finally { stack.pop(); }
+    };
+  }
+
+  /** 기본값(생성자 포함)으로 만든 객체의 칸들을 돌려주는 함수 */
+  defaultCells(type, line) {
+    const c = this.constructInit(type, null, line, typeName(type));
+    const zeros = zerosOf(type);
+    const n = cells(type);
+    return (f) => {
+      const st = new Store(n, "임시 객체", type);
+      st.cells = zeros.slice();
+      if (c) c(f, new Ptr(st, 0));
+      return st.cells;
+    };
+  }
+
+  /** obj.method(…) / ptr->method(…) / 멤버 함수 안의 method(…) */
+  methodCall(cls, selfEv, isConstObj, name, node) {
+    const { line } = node;
+    const rt = this.rt;
+    const group = cls.methodMap.get(name);
+    if (!group) {
+      if (cls.staticFns.has(name)) return this.callUser(this.funcs.get(`${cls.qname || cls.tag}::${name}`), node);
+      const names = [...cls.methodMap.keys(), ...cls.staticFns];
+      const field = cls.fields.find((fl) => fl.name === name);
+      throw compileError(line, field ? `'${name}'는 멤버 변수라서 ( )를 붙일 수 없어요` : `${typeName(cls)}에는 ${name}() 함수가 없어요`,
+        names.length ? `있는 멤버 함수: ${names.join(", ")}.${suggest(name, names)}` : "클래스 안에 멤버 함수를 만들어 주세요.");
+    }
+    const pre = node.args.map((a) => (a.k === "initlist" ? { t: { k: "initlist" }, initlist: true } : this.expr(a)));
+    const fi = group.length > 1 ? this.pickOverload(group, pre, node, name) : group[0];
+    if (fi.access !== "public" && !(this.fn && this.fn.cls === cls)) {
+      throw compileError(line, `'${name}'는 ${fi.access} 함수라 클래스 밖에서 부를 수 없어요`, "클래스 안에서 public: 아래로 옮기면 밖에서도 부를 수 있어요.");
+    }
+    if (isConstObj && !fi.isConstMethod) {
+      throw compileError(line, `const인 객체로는 const 함수만 부를 수 있어요`, `${name}가 객체를 바꾸지 않는다면 선언 뒤에 const를 붙여요. 예: int ${name}() const { … }`);
+    }
+    const target = fi;
+    return this.callWith(fi.type, node, `${cls.tag}::${name}`, (f, vals, used, types) => {
+      const self = selfEv(f);
+      if (self === null) throw runtimeError(line, `NULL 포인터로 멤버 함수 ${name}()를 불렀어요`, "객체를 가리키는지 먼저 확인해 주세요.");
+      return this.invoke(target, [self, ...vals], line, used, types);
+    }, fi, pre);
+  }
+
+  /** 객체 식에서 그 주소를 꺼내는 함수 (이름 없는 값이면 임시 칸을 만들어요) */
+  selfOf(B, line) {
+    if (B.lv) return B.lv;
+    const ev = B.ev;
+    const n = cells(B.t);
+    const t = B.t;
+    return (f) => { const st = new Store(n, "임시 객체", t); st.cells = ev(f); return new Ptr(st, 0); };
+  }
+
   // ---------- C++ 2단계: std::string, std::vector ----------
   /** 비어 있는(null) string/vector를 처음 쓸 때 만들어요 */
   freshObj(type) {
@@ -662,6 +1031,11 @@ export class Compiler {
   /** vector의 원소 하나를 만드는 함수: 원소 칸들의 목록을 돌려줘요 */
   elemValue(of, node, line, what) {
     const unit = cells(of);
+    if (isStruct(of) && of.isCppClass && node && node.k === "initlist") {
+      const c = this.classInit(of, node, line, what);
+      const zeros = zerosOf(of);
+      return (f) => { const st = new Store(unit, what, of); st.cells = zeros.slice(); if (c) c(f, new Ptr(st, 0)); return st.cells; };
+    }
     if (node && node.k === "initlist" && isStruct(of)) {
       const init = this.initializer(of, node, line, what);
       const empty = zerosOf(of);
@@ -719,7 +1093,7 @@ export class Compiler {
       // vector<int> v(5); vector<int> v(5, 1);
       const N = this.conv(first, T.long, line, what);
       const zeros = zerosOf(of);
-      const item = args[1] ? this.elemValue(of, args[1], line, `${name}의 원소`) : null;
+      const item = args[1] ? this.elemValue(of, args[1], line, `${name}의 원소`) : this.needsConstruct(of) ? this.defaultCells(of, line) : null;
       return (f) => {
         const n = Number(N.ev(f));
         if (n < 0 || n * unit > 10_000_000) throw runtimeError(line, `vector를 ${n}칸으로 만들 수 없어요`, "개수가 음수이거나 너무 커요.");
@@ -1448,6 +1822,17 @@ export class Compiler {
       case "new": return this.newExpr(node);
       case "construct": {
         const type = this.resolveType(node.type, { line });
+        if (isStruct(type)) {
+          // Counter(5): 이름 없는 객체
+          const c = this.constructInit(type, node.args ? { k: "ctor", args: node.args, line } : node.list, line, typeName(type));
+          const n = cells(type);
+          const zeros = zerosOf(type);
+          return { t: type, ev: (f) => { const st = new Store(n, "임시 객체", type); st.cells = zeros.slice(); if (c) c(f, new Ptr(st, 0)); return st.cells; } };
+        }
+        if (!isObj(type)) {
+          if (!node.args || node.args.length !== 1) throw compileError(line, `${typeName(type)}(…)에는 값 하나를 넣어요`);
+          return this.cast({ k: "cast", type: node.type, e: node.args[0], line });
+        }
         return { t: type, ev: this.objectValue(type, node.args ? { k: "ctor", args: node.args, line } : node.list, line, typeName(type)) };
       }
       case "delete": return this.deleteExpr(node);
@@ -1546,6 +1931,20 @@ export class Compiler {
 
   identifier(node) {
     const { line } = node;
+    const cls = this.cpp && this.fn ? this.fn.cls : null;
+    if (cls && !this.lookupLocal(node.name)) {
+      // 멤버 함수 안: 멤버 이름은 this->이름
+      const field = cls.fields.find((fl) => fl.name === node.name);
+      if (field) {
+        if (this.fn.isStatic) throw compileError(line, `static 함수에서는 멤버 변수 '${node.name}'를 쓸 수 없어요`, "static 함수에는 this(객체)가 없어요.");
+        return this.member({ k: "member", e: { k: "id", name: "this", line }, name: node.name, arrow: true, line });
+      }
+      if (cls.staticNames.has(node.name)) return this.identifier({ ...node, name: `${cls.qname || cls.tag}::${node.name}` });
+      if (cls.methodMap.has(node.name)) throw compileError(line, `멤버 함수 '${node.name}'는 ${node.name}() 처럼 괄호를 붙여 불러요`);
+    }
+    if (this.cpp && node.name === "this" && !this.lookup("this")) {
+      throw compileError(line, "this는 클래스의 멤버 함수 안에서만 쓸 수 있어요", this.fn && this.fn.isStatic ? "static 함수에는 this가 없어요." : "");
+    }
     const name = this.resolveName(node.name);
     const info = this.lookup(name);
     if (info) {
@@ -1683,6 +2082,16 @@ export class Compiler {
       }
     }
     const field = st.fields.find((x) => x.name === node.name);
+    if (!field && st.methodMap) {
+      if (st.methodMap.has(node.name) || st.staticFns.has(node.name)) {
+        throw compileError(line, `멤버 함수 '${node.name}'는 ${where}${node.arrow ? "->" : "."}${node.name}() 처럼 괄호를 붙여 불러요`);
+      }
+      if (st.staticNames.has(node.name)) return this.identifier({ k: "id", name: `${st.qname || st.tag}::${node.name}`, line });
+    }
+    if (field && field.access && field.access !== "public" && !(this.fn && this.fn.cls === st)) {
+      throw compileError(line, `'${node.name}'는 ${field.access} 멤버라 클래스 밖에서 쓸 수 없어요`,
+        `클래스의 public 멤버 함수(예: get${node.name[0].toUpperCase()}${node.name.slice(1)}())로 꺼내거나, public: 아래로 옮겨요.`);
+    }
     if (!field) {
       const names = st.fields.map((x) => x.name);
       throw compileError(line, `${typeName(st)}에는 '${node.name}' 멤버가 없어요`,
@@ -2043,16 +2452,30 @@ export class Compiler {
     if (this.cpp && node.callee.k === "member") {
       if (node.callee.arrow) {
         const P = this.value(this.expr(node.callee.e), line);
+        if (isPtr(P.t) && isStruct(P.t.to) && P.t.to.methodMap) {
+          return this.methodCall(P.t.to, P.ev, Boolean(P.t.toConst), node.callee.name, node);
+        }
         if (isPtr(P.t) && isObj(P.t.to)) {
           return this.objMethod(this.withLoad({ t: P.t.to, lv: P.ev, isConst: Boolean(P.t.toConst) }, line), node.callee.name, node);
         }
       } else {
         const B = this.expr(node.callee.e);
         if (B.t.k === "stream") return this.streamMethod(B, node.callee.name, node);
+        if (isStruct(B.t) && B.t.methodMap) return this.methodCall(B.t, this.selfOf(B, line), Boolean(B.isConst), node.callee.name, node);
         if (isObj(B.t)) return this.objMethod(B, node.callee.name, node);
       }
     }
     if (node.callee.k === "id") {
+      const cls = this.cpp && this.fn ? this.fn.cls : null;
+      if (cls && !this.lookupLocal(node.callee.name)) {
+        // 멤버 함수 안에서 다른 멤버 함수 부르기: add() → this->add()
+        if (cls.methodMap.has(node.callee.name)) {
+          if (this.fn.isStatic) throw compileError(line, `static 함수에서는 멤버 함수 ${node.callee.name}()를 부를 수 없어요`);
+          const self = this.identifier({ k: "id", name: "this", line });
+          return this.methodCall(cls, self.ev, Boolean(self.t.toConst), node.callee.name, node);
+        }
+        if (cls.staticFns.has(node.callee.name)) return this.call({ ...node, callee: { ...node.callee, name: `${cls.qname || cls.tag}::${node.callee.name}` } });
+      }
       let name = this.resolveName(node.callee.name);
       const info = this.lookup(name);
       if (this.cpp && !info && !this.funcs.has(name)) {
@@ -2135,6 +2558,9 @@ export class Compiler {
   /** 복합 리터럴: (int[]){1, 2, 3} 처럼 이름 없이 만드는 값 */
   compound(node) {
     const { line } = node;
+    if (this.cpp && isStruct(node.type) && node.type.isCppClass && node.type.ctors && node.type.ctors.some((c) => !c.implicit)) {
+      return this.exprInner({ k: "construct", type: node.type, list: node.init, line });
+    }
     const type = this.resolveType(node.type, { initLen: this.initLength(node.type, node.init) });
     if (isVoid(type) || isFunc(type)) throw compileError(line, "복합 리터럴의 타입이 올바르지 않아요");
     const size = cells(type);
@@ -2665,7 +3091,7 @@ export class Compiler {
         this.declare(info);
         if (global) this.globals.push(info);
         else this.fn.locals.push(info);
-        const init = this.initializer(type, item.init, item.line, item.name);
+        const init = this.makeInit(type, item.init, item.line, item.name);
         if (init) this.globalInits.push(() => init(null, st));
         continue;
       }
@@ -2673,7 +3099,7 @@ export class Compiler {
       const info = { name: item.name, type, slot, line: item.line, vla: dyn, isConst: item.isConst, constValue: this.constValueOf(item, type) };
       this.declare(info);
       this.fn.locals.push(info);
-      const init = this.initializer(type, item.init, item.line, item.name);
+      const init = this.makeInit(type, item.init, item.line, item.name);
       const { name, line } = item;
       const rt = this.rt;
       const dims = vlaDims(type);
@@ -2709,6 +3135,15 @@ export class Compiler {
           : (f) => { f[slot] = new Store(size, name, type); return NORMAL; });
     }
     return closures;
+  }
+
+  /** 변수의 처음 값을 넣는 함수 (f, 저장 칸). C++ 클래스는 생성자를 불러요 */
+  makeInit(type, init, line, name) {
+    if (this.cpp && ((isStruct(type) && type.isCppClass) || (isArr(type) && this.needsConstruct(type)))) {
+      const c = this.constructInit(type, init, line, name);
+      return c ? (f, st) => c(f, new Ptr(st, 0)) : null;
+    }
+    return this.initializer(type, init, line, name);
   }
 
   /** C++: 상수로 처음 값을 넣은 const 정수는 상수 식이에요 */
@@ -2819,6 +3254,12 @@ export class Compiler {
     fi.locals = [];
     fi.params = [];
     this.push();
+    if (fi.cls && !fi.isStatic) {
+      // 멤버 함수: 보이지 않는 첫 매개변수 this (객체의 주소)
+      const info = { name: "this", type: fi.thisType, slot: fi.slotCount++, line: def.line, cells: 1, isConst: true, isThis: true };
+      this.declare(info);
+      fi.params.push(info);
+    }
     const dims = [];
     def.type.params.forEach((p, i) => {
       if (!p.name) throw compileError(def.line, `함수 '${fi.name}'의 ${i + 1}번째 매개변수에 이름이 필요해요`);
@@ -2835,7 +3276,9 @@ export class Compiler {
       fi.params.push(info);
     });
     this.fnLabels = this.allLabels(def.body);
-    const body = this.block(def.body, false);
+    const prologue = fi.kind === "ctor" ? this.ctorPrologue(fi, def.inits, def.line) : null;
+    const inner = this.block(def.body, false);
+    const body = prologue ? (f) => { prologue(f); return inner(f); } : inner;
     const rt = this.rt;
     fi.body = dims.length ? (f) => { fillDims(dims, f, rt); return body(f); } : body;
     this.ns = "";
@@ -2976,8 +3419,23 @@ export class Compiler {
     const labels = new Map();
     for (const s of node.body) this.collect(s, list, labels);
     this.labelScopes.pop();
+    // C++: 블록이 끝나면 이 블록에서 만든 객체의 소멸자를 거꾸로 불러요
+    const dying = this.cpp ? [...this.scope.vars.values()].filter((i) => i.slot !== undefined && !i.store && !i.isThis && this.hasDtor(i.type)).reverse()
+      .map((i) => ({ slot: i.slot, fn: this.destroyFn(i.type, node.line) })) : [];
     if (newScope) this.pop();
-    return this.seq(list, labels);
+    const run = this.seq(list, labels);
+    if (!dying.length) return run;
+    return (f) => {
+      const c = run(f);
+      for (const d of dying) {
+        const st = f[d.slot];
+        if (st && !st.destroyed) {
+          st.destroyed = true;
+          d.fn(new Ptr(st, 0));
+        }
+      }
+      return c;
+    };
   }
 
   /** 문장 하나를 클로저 목록에 넣어요. 이름표 자리도 기억해요. */
@@ -3100,6 +3558,12 @@ export class Compiler {
         }
         const E = this.conv(this.value(this.expr(node.e), line), ret, line, "돌려주는 값");
         const ev = E.ev;
+        // return 지역객체; : 그 객체는 그대로 넘겨주므로 여기서 소멸자를 부르지 않아요 (진짜 C++의 복사 생략)
+        const local = this.cpp && node.e.k === "id" ? this.lookupLocal(node.e.name) : null;
+        if (local && local.slot !== undefined && !local.isThis && this.hasDtor(local.type)) {
+          const slot = local.slot;
+          return (f) => { rt.line = line; rt.ret = ev(f); if (f[slot]) f[slot].destroyed = true; return RETURN; };
+        }
         return (f) => { rt.line = line; rt.ret = ev(f); return RETURN; };
       }
       case "label": {
@@ -3199,24 +3663,41 @@ export class Compiler {
     this.builtinTypes = ast.builtinTypes || {};
     for (const t of Object.values(this.builtinTypes)) if (isStruct(t)) this.layout(t, 0);
     this.rt.builtinTypes = this.builtinTypes;
+    if (this.cpp) this.registerClasses(ast.classes || []);
     // 함수 이름을 먼저 모두 등록해서, 뒤에 만든 함수도 부를 수 있게 해요.
     for (const item of ast.items) {
-      if (item.k === "func") item.fi = this.declareFunction(item, item);
+      if (item.k !== "func") continue;
+      const method = this.cpp ? this.attachClassMethod(item) : null;
+      if (!method && item.special) throw compileError(item.line, `${item.name}: 이런 클래스가 없어요`);
+      item.fi = method || this.declareFunction(item, item);
     }
     for (const item of ast.items) {
       this.ns = item.ns || "";
       if (item.k === "func") {
         const fi = item.fi;
-        if (fi.def === item) this.compileFunction(fi);
+        if (fi.def === item || fi.defItem === item) this.compileFunction(fi);
       } else if (item.k === "staticassert") {
         this.staticAssert(item);
       } else if (item.k === "using") {
         this.usingDecl(item);
       } else {
         this.declaration(item, true);
+        // 클래스 안에서 몸통까지 만든 멤버 함수들은 클래스가 나온 자리에서 컴파일해요
+        for (const cls of item.classes || []) {
+          for (const fi of cls.allFis) {
+            if (!fi.def || fi.defItem || fi.compiled || (fi.def.k === "func")) continue; // 클래스 밖에서 만든 것은 그 자리에서
+            fi.compiled = true;
+            this.compileFunction(fi);
+          }
+        }
+        this.ns = "";
       }
     }
     const undefinedExtern = this.globals.find((g) => g.externDecl);
+    if (undefinedExtern && undefinedExtern.staticMember) {
+      throw compileError(undefinedExtern.line, `static 멤버 '${undefinedExtern.name}'를 클래스 밖에서 정의해 주세요`,
+        `클래스 아래에 ${typeName(undefinedExtern.type)} ${undefinedExtern.name} = 0; 처럼 써요. (또는 클래스 안에서 static inline 으로 값을 넣어요)`);
+    }
     if (undefinedExtern) {
       throw compileError(undefinedExtern.line, `extern으로 선언한 '${undefinedExtern.name}'의 정의가 없어요`,
         `이 앱은 파일 하나로 실행돼요. 아래쪽에 ${typeName(undefinedExtern.type)} ${undefinedExtern.name} = 0; 처럼 정의를 넣어 주세요.`);
@@ -3242,6 +3723,10 @@ export class Compiler {
           args = [1, new Ptr(argv, 0)];
         }
         const code = this.invoke(main, args, main.line, true);
+        // 전역 객체의 소멸자: main이 끝난 뒤 거꾸로
+        for (const g of [...this.globals].reverse()) {
+          if (this.cpp && this.hasDtor(g.type)) this.destroyFn(g.type, g.line)(new Ptr(g.store, 0));
+        }
         return code === undefined ? 0 : Number(code);
       },
       main,

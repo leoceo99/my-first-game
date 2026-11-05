@@ -437,4 +437,58 @@ int main() {
 }
 `,
   },
+  {
+    lang: "cpp",
+    name: "C++ 은행 계좌",
+    about: "class, private, 생성자, 멤버 함수, const",
+    code: `#include <iostream>
+#include <string>
+using namespace std;
+
+class Account {
+    string owner;   // private: 밖에서 바로 바꿀 수 없어요
+    int balance;
+
+public:
+    Account(string name, int money = 0) : owner(name), balance(money) {}
+
+    void deposit(int amount) {
+        balance += amount;
+        cout << amount << "원 넣었어요." << endl;
+    }
+
+    bool withdraw(int amount) {
+        if (amount > balance) {
+            cout << "잔액이 모자라요!" << endl;
+            return false;
+        }
+        balance -= amount;
+        cout << amount << "원 뺐어요." << endl;
+        return true;
+    }
+
+    void print() const {
+        cout << owner << "님의 잔액: " << balance << "원" << endl;
+    }
+};
+
+int main() {
+    Account acc("민지", 1000);
+    acc.print();
+
+    int money;
+    cout << "얼마를 넣을까요? ";
+    cin >> money;
+    acc.deposit(money);
+
+    cout << "얼마를 뺄까요? ";
+    cin >> money;
+    acc.withdraw(money);
+
+    acc.print();
+    // acc.balance = 999999;  ← 이 줄의 // 를 지우면 private라서 오류가 나요
+    return 0;
+}
+`,
+  },
 ];
