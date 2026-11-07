@@ -22,16 +22,16 @@
 
 | 기능 | 결과 | 쓰는 방법 / 비고 |
 |---|---|---|
-| 서브에이전트 | 🔄 확인 중 (T-004) | `Agent` 도구. |
-| 서브에이전트 파일 격리 | 🔄 확인 중 (T-004) | `Agent`의 `isolation: "worktree"`. |
-| 병렬 작업 | 🔄 확인 중 (T-004, T-005) | 서브에이전트 + 작업 세션 동시 실행. **규칙상 동시 3개 이하.** |
-| 새 클라우드 세션 만들기 | 🔄 확인 중 (T-005) | `create_session` (MCP `claude-code-remote`). |
-| 다른 세션 상태·대화 확인 | ✅ 됨 (목록) | `list_sessions`, `get_session`(status_bucket), `list_events`(대화 기록). |
-| 다른 세션에 지시 보내기 | 🔄 확인 중 (T-005) | `send_message(session_id, …)`. |
-| 작업 세션 → 총괄 세션 답장 | 🔄 확인 중 (T-005) | |
+| 서브에이전트 | ✅ 됨 (T-004) | `Agent` 도구, 백그라운드 실행. 끝나면 보고가 총괄 세션에 자동으로 온다. `model: "sonnet"`으로 비용을 줄일 수 있다. |
+| 서브에이전트 파일 격리 | ✅ 됨, 주의점 있음 (T-004) | `isolation: "worktree"` → `.claude/worktrees/agent-<id>`, 브랜치 `worktree-agent-<id>`. **worktree는 통합 브랜치가 아니라 `main`에서 만들어진다.** 그 안에서는 복합 명령(`&&`, heredoc)과 메인 체크아웃으로 `cd`하는 명령이 거부됐다. 5.1 참고. |
+| 병렬 작업 | ✅ 됨 (T-004 + T-005 동시 실행) | 서브에이전트(백그라운드)와 작업 세션을 동시에 돌렸다. **규칙상 동시 3개 이하.** |
+| 새 클라우드 세션 만들기 | ✅ 됨 (T-005) | `create_session` (MCP `claude-code-remote`). 저장소·시작 브랜치·결과 브랜치·모델·태그를 지정할 수 있다. 새 세션은 `CLAUDE.md`를 자동으로 읽는다. |
+| 다른 세션 상태·대화 확인 | ✅ 됨 (T-005) | `list_sessions`, `get_session`(status_bucket), `list_events(kinds=["result"], limit=5)` → 각 턴의 최종 답(`result`). 출력이 길어서 `kinds`로 꼭 줄인다. |
+| 다른 세션에 지시 보내기 | ✅ 됨 (T-005) | `send_message(session_id, message, priority="later")` → 상대 턴이 끝난 뒤 전달되고, 상대가 따른다. |
+| 작업 세션 → 총괄 세션 답장 | ✅ 됨 (T-005) | 작업 세션이 `send_message(session_id=<총괄 ID>)`를 호출하면 총괄의 알림함(`ReadNotifications`)에 도착한다. |
 | `SendMessage` / `ListAgents` (로컬 피어) | ⚠️ 이 환경엔 대상 없음 | 같은 머신의 로컬 세션용이다. 다른 클라우드 세션이 있어도 목록에 안 나온다. 클라우드 세션끼리는 `send_message`를 쓴다. |
-| 예약 작업 (서버) | 🔄 확인 중 (T-006) | `send_later`(1회), `create_trigger`(반복 cron). |
-| 예약 작업 (세션 내 `CronCreate`) | 🔄 확인 중 (T-006) | |
+| 예약 작업 (서버) | ✅ 등록됨, 실행 확인은 T-006 | `send_later`(1회), `create_trigger`(반복 cron, 보통 최소 1시간 간격). 서버에 저장돼서 컨테이너가 재시작돼도 유지된다. 실행 결과는 `TODO.md` T-006에 기록한다. |
+| 예약 작업 (세션 내 `CronCreate`) | ⚠️ 등록·조회·취소는 됨, 비추천 | 메모리에만 있어서 컨테이너가 회수되면 사라지고, 세션이 쉬고 있을 때만 실행된다. 서버 예약을 쓴다. |
 | PR 만들기·감시 | ✅ 가능 | GitHub MCP 도구, `subscribe_pr_activity`. **사용자가 요청할 때만** PR을 만든다. |
 | `gh` CLI / GitHub 직접 API | ❌ 안 됨 | GitHub MCP 도구를 대신 쓴다(검색만 `gh api search/...` 허용). |
 | 권한 모드 "Bypass permissions" | ❌ 클라우드에서 없음 | 가장 넓은 모드는 **Auto**다. 사용자가 프롬프트 옆 모드 메뉴에서 고른다. |
@@ -125,7 +125,12 @@
   규칙: 레인 밖 파일 수정 금지, 파일 삭제 금지, 푸시 금지, TODO.md 수정 금지.
   끝나면 reports/<작업ID>.md를 쓰고(worktree면 그 안에서 커밋), 최종 답변에 한 일·바뀐 파일·검증 결과를 요약해.
   ```
-- 결과가 오면: 변경을 검토 → (worktree면 `git merge <worktree 브랜치>`) → 통합 브랜치에 커밋·푸시 → `TODO.md` 갱신.
+- **worktree 주의 (T-004에서 확인)**: worktree는 `main`에서 시작해서 그 안에는 `CLAUDE.md`, `TODO.md`가 없을 수 있다. 프롬프트에 다음을 넣는다.
+  - "규칙 파일은 `/home/user/my-first-game/CLAUDE.md`, `/home/user/my-first-game/TODO.md`에서 읽어."
+  - "작업 전에 worktree 안에서 `git merge --ff-only claude/vibrant-archimedes-t0utvy`를 한 번 실행해서 통합 브랜치 기준으로 맞춰." (아직 검증하지 않은 권장 사항이다. 실패하면 보고만 하게 한다.)
+  - "git 명령은 하나씩 따로 실행하고(`&&`, heredoc 금지), 파일은 Write 도구로 써."
+- 결과가 오면: 변경을 검토 → (worktree면 메인 체크아웃에서 `git merge --no-ff worktree-agent-<id>`) → 통합 브랜치에 푸시 → `TODO.md` 갱신.
+- 끝난 worktree 폴더는 지우지 않는다(삭제 금지). `.gitignore`에 들어 있고, 컨테이너가 회수되면 함께 사라진다.
 
 ### 5.2 작업 세션 만들기
 - `create_session`: `source_url=https://github.com/leoceo99/my-first-game`, `source_revision=<통합 브랜치>`,
@@ -135,7 +140,9 @@
 
 ### 5.3 감독·지시
 - 상태: `get_session(session_id)` → `status_bucket`(working / blocked / review_ready / completed / failed).
-- 대화 확인: `list_events(session_id, kinds=["assistant","result"], limit=100)`.
+- 대화 확인: `list_events(session_id, kinds=["result"], limit=5)` → 각 턴의 최종 답만 본다(`assistant`까지 넣으면 출력이 매우 길다).
+- 작업 세션이 보낸 답장: `ReadNotifications`로 읽는다(`send_message`로 온 메시지가 알림함에 쌓인다).
+- 끝난 작업 세션은 그대로 두면 쉬는 상태로 남고 사용량을 쓰지 않는다. 보관(archive)은 사용자가 정리할 때 한다.
 - 추가 지시: `send_message(session_id, message)`. 진로가 틀어졌으면 `interrupt_session` 후 지시한다.
 - 결과 받기: `git fetch origin claude/<레인>-<작업ID>` → 검토 → `git merge --no-ff` → 통합 브랜치 푸시.
 
