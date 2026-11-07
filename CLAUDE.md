@@ -30,7 +30,7 @@
 | 다른 세션에 지시 보내기 | ✅ 됨 (T-005) | `send_message(session_id, message, priority="later")` → 상대 턴이 끝난 뒤 전달되고, 상대가 따른다. |
 | 작업 세션 → 총괄 세션 답장 | ✅ 됨 (T-005) | 작업 세션이 `send_message(session_id=<총괄 ID>)`를 호출하면 총괄의 알림함(`ReadNotifications`)에 도착한다. |
 | `SendMessage` / `ListAgents` (로컬 피어) | ⚠️ 이 환경엔 대상 없음 | 같은 머신의 로컬 세션용이다. 다른 클라우드 세션이 있어도 목록에 안 나온다. 클라우드 세션끼리는 `send_message`를 쓴다. |
-| 예약 작업 (서버) | ✅ 등록됨, 실행 확인은 T-006 | `send_later`(1회), `create_trigger`(반복 cron, 보통 최소 1시간 간격). 서버에 저장돼서 컨테이너가 재시작돼도 유지된다. 실행 결과는 `TODO.md` T-006에 기록한다. |
+| 예약 작업 (서버) | ✅ 됨 (T-006) | `send_later`(1회), `create_trigger`(반복 cron, 보통 최소 1시간 간격). 서버에 저장돼서 컨테이너가 재시작돼도 유지된다. 지정한 시간에 총괄 세션 알림함으로 와서, 쉬고 있던 세션을 깨워 작업을 이어가게 한다. |
 | 예약 작업 (세션 내 `CronCreate`) | ⚠️ 등록·조회·취소는 됨, 비추천 | 메모리에만 있어서 컨테이너가 회수되면 사라지고, 세션이 쉬고 있을 때만 실행된다. 서버 예약을 쓴다. |
 | PR 만들기·감시 | ✅ 가능 | GitHub MCP 도구, `subscribe_pr_activity`. **사용자가 요청할 때만** PR을 만든다. |
 | `gh` CLI / GitHub 직접 API | ❌ 안 됨 | GitHub MCP 도구를 대신 쓴다(검색만 `gh api search/...` 허용). |

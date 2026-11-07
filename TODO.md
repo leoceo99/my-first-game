@@ -3,7 +3,7 @@
 > 규칙과 역할은 `CLAUDE.md`. 이 파일은 **총괄 세션만** 고친다. 작업자는 `reports/<작업ID>.md`에 결과를 쓴다.
 > 작업 ID 형식: `T-001`부터 차례로(사용자 결정은 `U-01`…). 상태가 바뀌면 행을 해당 표로 옮긴다.
 
-마지막 갱신: 2026-11-07 17:00 UTC 무렵 (총괄 세션 `session_01BfrX53CHWvJYbgaip4CsNq`)
+마지막 갱신: 2026-11-07 17:05 UTC (총괄 세션 `session_01BfrX53CHWvJYbgaip4CsNq`)
 
 ## 지금 상태 한 줄 요약 (다음 세션은 여기부터)
 운영 체계 구축과 시범 운영 완료. **사용자의 게임 방향 결정(T-010)을 기다리는 중**이다. 결정이 나면 T-011부터 진행한다.
@@ -37,7 +37,7 @@
 
 | ID | 작업 | 담당 | 브랜치 | 시작 | 상태 / 다음 단계 |
 |---|---|---|---|---|---|
-| T-006 | 예약 작업 실험 | 총괄 | - | 11-07 | `CronCreate` 확인 끝. `send_later`(`trig_01DoxRvLPaXRPz3bE1KAGcUN`)가 17:04 UTC에 실행되면 여기에 기록하고 완료로 옮긴다 |
+| - | (진행 중인 작업 없음. T-010 사용자 결정 대기) | - | - | - | - |
 
 ---
 
@@ -49,6 +49,7 @@
 | T-002 | 운영 체계 설계 (역할 3종, 레인 4개, 동시 3개 한도) | 총괄 | `CLAUDE.md` 3장 | 11-07 |
 | T-003 | `CLAUDE.md`, `TODO.md`, `.gitignore`, `docs/permissions.md` 작성 | 총괄 | 커밋 `854c9c8`. `.claude/settings.json`은 Auto 안전장치가 막아서 제안 문서로 대체 | 11-07 |
 | T-004 | **시범 운영**: 서브에이전트(worktree, Sonnet)가 게임 방향 후보 정리 | 서브에이전트 | ✅ 성공. `docs/game-ideas.md`, `reports/T-004.md` 작성. 레인(L3) 밖 수정 없음. worktree 커밋 `3135306` → 통합 브랜치에 병합 `0901913`. 약 1분, 86k 토큰. 발견한 문제는 아래 실험 기록 | 11-07 |
+| T-006 | 예약 작업 실험 | 총괄 | ✅ 성공. `send_later`(16:51 등록, 12분 뒤)가 **17:04:39 UTC에 실행**돼 총괄 세션 알림함에 도착했다. `CronCreate`는 등록·조회·취소만 확인(비추천) | 11-07 |
 | T-005 | 세션 간 기능 실험 (읽기 전용 작업 세션, Sonnet) | 작업 세션 `session_01BfrX54BgLQ8Mg9jKF8Y3Mi` | ✅ 성공. 새 세션이 `CLAUDE.md`+`TODO.md`만 보고 규칙과 "Backlog는 T-010에 막혀 있음"을 정확히 파악했다. 추가 지시를 따랐고 답장도 왔다. 비용 약 $0.21 | 11-07 |
 
 ---
@@ -67,7 +68,7 @@
 | 서브에이전트 | `Agent`(백그라운드, `model: sonnet`, `isolation: worktree`) | ✅ 작업, 커밋, 보고 정상. ⚠️ worktree가 `main`(Initial commit) 기준이라 규칙 파일이 없었음(메인 체크아웃에서 읽음). ⚠️ worktree 안에서 `cd`+복합 명령이 거부돼 명령을 하나씩 실행함 → CLAUDE.md 5.1에 대응 방법 기록 |
 | 병렬 | 서브에이전트 1 + 작업 세션 1 동시 실행 | ✅ 충돌 없음 (파일 범위가 달라서) |
 | 세션 내 예약 | `CronCreate` → `CronList` → `CronDelete` | ⚠️ 등록·조회·취소 됨. 메모리에만 있어서 비추천. 쓸데없는 실행을 막으려고 바로 취소함 |
-| 서버 예약 | `send_later(12분)` | 🔄 등록됨 (`trig_01DoxRvLPaXRPz3bE1KAGcUN`, 17:04 UTC 실행 예정) |
+| 서버 예약 | `send_later(12분)` | ✅ 17:04:39 UTC에 실행됨. 총괄 세션이 쉬는 동안 알림으로 깨워서 작업을 이어갔다 |
 | GitHub | `list_branches` (MCP) | ✅ 브랜치 조회 가능. `gh` CLI는 이 환경에서 안 됨 |
 | 권한 설정 파일 | `.claude/settings.json` 쓰기 | ❌ Auto 안전장치가 "자기 권한 수정"으로 거부 → `docs/permissions.md`에 안만 남김 |
 | 권한 모드 | 문서 확인 | 클라우드에는 Bypass가 없음. Auto가 가장 넓음. 이 세션은 이미 Auto |
@@ -98,4 +99,4 @@
 |---|---|---|---|---|---|
 | 총괄 세션 | `session_01BfrX53CHWvJYbgaip4CsNq` | 총괄 | `claude/vibrant-archimedes-t0utvy` | 실행 중 | |
 | 작업 세션 | `session_01BfrX54BgLQ8Mg9jKF8Y3Mi` | T-005 | `claude/test-T-005` (푸시 없음) | 완료, 쉬는 중 | 사용자가 정리할 때 보관하면 됨 |
-| 서버 예약(1회) | `trig_01DoxRvLPaXRPz3bE1KAGcUN` | T-006 | - | 17:04 UTC 실행 예정 | 실행 후 자동으로 꺼짐 |
+| 서버 예약(1회) | `trig_01DoxRvLPaXRPz3bE1KAGcUN` | T-006 | - | 실행 완료 (17:04:39 UTC) | 1회용이라 자동으로 꺼짐 |
