@@ -1,0 +1,10 @@
+# 서브에이전트 worktree (isolation: "worktree")
+.claude/worktrees/
+# 개인 설정 (커밋하지 않음)
+.claude/settings.local.json
+# 흔한 빌드 산출물
+node_modules/
+dist/
+build/
+__pycache__/
+.DS_Store
