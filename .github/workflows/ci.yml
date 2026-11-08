@@ -1,5 +1,8 @@
-# T-014: 모든 브랜치 푸시와 PR에서 테스트·빌드를 돌리고, main에 푸시되면 GitHub Pages에 배포한다.
-# 배포가 되려면 저장소 Settings → Pages → Source를 "GitHub Actions"로 바꿔야 한다 (TODO.md U-03).
+# T-014: 모든 브랜치 푸시와 PR에서 테스트·빌드를 돌린다.
+# GitHub Pages 배포는 사용자가 켤 때만 한다 (TODO.md U-03):
+#   1) Settings → Pages → Source를 "GitHub Actions"로 바꾸고
+#   2) Settings → Secrets and variables → Actions → Variables에 PAGES_DEPLOY = true 를 추가하면
+#   main에 푸시될 때 배포된다. 주의: 지금 Pages는 다른 브랜치(claude/popular-game-dev-languages-mye732)를 배포 중이라 바꾸면 그 사이트가 대체된다.
 name: CI & Pages
 
 on:
@@ -29,13 +32,13 @@ jobs:
       - if: hashFiles('package-lock.json') != ''
         run: npm run build
       - name: Upload Pages artifact (main only)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && hashFiles('package-lock.json') != ''
+        if: vars.PAGES_DEPLOY == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' && hashFiles('package-lock.json') != ''
         uses: actions/upload-pages-artifact@v3
         with:
           path: dist
 
   deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: vars.PAGES_DEPLOY == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: test-build
     runs-on: ubuntu-latest
     permissions:

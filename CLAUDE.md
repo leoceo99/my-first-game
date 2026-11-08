@@ -14,7 +14,7 @@
 - 기술 스택: **TypeScript + Vite + Canvas 2D**(게임 엔진 없음), 테스트는 **Vitest**, 패키지 관리는 **npm**.
   - 게임 규칙(`src/core`)은 순수 TypeScript로 쓰고 DOM·브라우저 API를 쓰지 않는다. 그래야 Vitest로 바로 테스트할 수 있다.
   - 화면·입력(`src/ui`)만 Canvas, 키보드, 터치를 다룬다.
-- 명령(T-012에서 확정): `npm install` → `npm run dev`(개발 서버) / `npm test`(테스트) / `npm run build`(배포용 빌드)
+- 명령(T-012에서 확정): `npm ci`(설치) → `npm run dev`(개발 서버) / `npm test`(테스트) / `npm run build`(배포용 빌드, `dist/`) / `npm run preview`
 - 기본 브랜치: `main` (사용자만 병합한다)
 - 통합 브랜치(총괄 세션용): `claude/vibrant-archimedes-t0utvy`
 
@@ -22,24 +22,22 @@
 
 ## 2. 이 환경에서 되는 것 / 안 되는 것
 
-2026-11-07에 웹/모바일 Claude Code(클라우드 세션)에서 **직접 시도해서 확인한 결과**다. 상세 근거는 `TODO.md`의 완료 항목 T-001, T-004 ~ T-006에 있다.
+웹/모바일 Claude Code(클라우드 세션)에서 **직접 시도해서 확인한 결과**다(2026-11-07~08). 상세 기록은 `TODO.md` "실험 기록".
 
-| 기능 | 결과 | 쓰는 방법 / 비고 |
+| 기능 | 결과 | 핵심 사용법 |
 |---|---|---|
-| 서브에이전트 | ✅ 됨 (T-004) | `Agent` 도구, 백그라운드 실행. 끝나면 보고가 총괄 세션에 자동으로 온다. `model: "sonnet"`으로 비용을 줄일 수 있다. |
-| 서브에이전트 파일 격리 | ✅ 됨, 주의점 있음 (T-004) | `isolation: "worktree"` → `.claude/worktrees/agent-<id>`, 브랜치 `worktree-agent-<id>`. **worktree는 통합 브랜치가 아니라 `main`에서 만들어진다.** 그 안에서는 복합 명령(`&&`, heredoc)과 메인 체크아웃으로 `cd`하는 명령이 거부됐다. 5.1 참고. |
-| 병렬 작업 | ✅ 됨 (T-004 + T-005 동시 실행) | 서브에이전트(백그라운드)와 작업 세션을 동시에 돌렸다. **규칙상 동시 3개 이하.** |
-| 새 클라우드 세션 만들기 | ✅ 됨 (T-005) | `create_session` (MCP `claude-code-remote`). 저장소·시작 브랜치·결과 브랜치·모델·태그를 지정할 수 있다. 새 세션은 `CLAUDE.md`를 자동으로 읽는다. |
-| 다른 세션 상태·대화 확인 | ✅ 됨 (T-005) | `list_sessions`, `get_session`(status_bucket), `list_events(kinds=["result"], limit=5)` → 각 턴의 최종 답(`result`). 출력이 길어서 `kinds`로 꼭 줄인다. |
-| 다른 세션에 지시 보내기 | ✅ 됨 (T-005) | `send_message(session_id, message, priority="later")` → 상대 턴이 끝난 뒤 전달되고, 상대가 따른다. |
-| 작업 세션 → 총괄 세션 답장 | ✅ 됨 (T-005) | 작업 세션이 `send_message(session_id=<총괄 ID>)`를 호출하면 총괄의 알림함(`ReadNotifications`)에 도착한다. |
-| `SendMessage` / `ListAgents` (로컬 피어) | ⚠️ 이 환경엔 대상 없음 | 같은 머신의 로컬 세션용이다. 다른 클라우드 세션이 있어도 목록에 안 나온다. 클라우드 세션끼리는 `send_message`를 쓴다. |
-| 예약 작업 (서버) | ✅ 됨 (T-006) | `send_later`(1회), `create_trigger`(반복 cron, 보통 최소 1시간 간격). 서버에 저장돼서 컨테이너가 재시작돼도 유지된다. 지정한 시간에 총괄 세션 알림함으로 와서, 쉬고 있던 세션을 깨워 작업을 이어가게 한다. |
-| 예약 작업 (세션 내 `CronCreate`) | ⚠️ 등록·조회·취소는 됨, 비추천 | 메모리에만 있어서 컨테이너가 회수되면 사라지고, 세션이 쉬고 있을 때만 실행된다. 서버 예약을 쓴다. |
-| PR 만들기·감시 | ✅ 가능 | GitHub MCP 도구, `subscribe_pr_activity`. **사용자가 요청할 때만** PR을 만든다. |
-| `gh` CLI / GitHub 직접 API | ❌ 안 됨 | GitHub MCP 도구를 대신 쓴다(검색만 `gh api search/...` 허용). |
-| 권한 모드 "Bypass permissions" | ❌ 클라우드에서 없음 | 가장 넓은 모드는 **Auto**다. 사용자가 프롬프트 옆 모드 메뉴에서 고른다. |
-| 사용자 PC 폴더 / Remote Control | 미사용 | 이 프로젝트에는 필요 없어서 시도하지 않았다. |
+| 서브에이전트 | ✅ | `Agent` 도구, 백그라운드 실행. 끝나면 보고가 자동으로 온다. 비용을 줄이려면 `model: "sonnet"` |
+| 서브에이전트 worktree 격리 | ✅ 주의 | `isolation: "worktree"`. **`main`에서 갈라지고**, 안에서 복합 명령(`&&`, heredoc)이 거부됨 → 5.2 |
+| 병렬 작업 | ✅ | 서브에이전트 + 작업 세션 동시 실행. 동시 3개 이하(사용량 경고 시 2개) |
+| 작업 세션 생성·확인·지시·답장 | ✅ | `create_session` / `get_session`, `list_events(kinds=["result"], limit=5)` / `send_message` / 답장은 총괄 알림함(`ReadNotifications`) |
+| 작업 세션 브랜치 → 총괄 병합 | ✅ (T-012) | 작업 세션이 자기 브랜치에 푸시 → 총괄이 `git fetch` → 5.4 체크리스트 → `git merge --no-ff` |
+| 서버 예약 작업 | ✅ | `send_later`(1회), `create_trigger`(반복, 보통 최소 1시간). 쉬고 있는 총괄 세션을 깨운다 |
+| 세션 안 예약(`CronCreate`) | ⚠️ 비추천 | 메모리에만 있어서 컨테이너가 회수되면 사라진다 |
+| `SendMessage` / `ListAgents` | ⚠️ 대상 없음 | 로컬 피어용. 클라우드 세션끼리는 `send_message` |
+| GitHub | ✅ | MCP 도구(브랜치·PR·Actions 조회). 워크플로 파일 푸시 됨(T-014). PR은 사용자 요청 때만. `gh` CLI 안 됨 |
+| 브라우저 확인 | ✅ (T-012) | 내장 Playwright(`require('playwright')`)로 화면·입력을 직접 확인 |
+| 권한 | Auto가 최대 | Bypass 없음. `.claude/settings.json` 쓰기는 Auto 안전장치가 막음 → 사용자 결정(U-02) |
+| Agent Teams, `.claude/agents/*.md` | 미확인 | Agent Teams는 실험 기능이라 쓰지 않는다. 에이전트 정의 파일은 T-015 때 시험한다 |
 
 ---
 
@@ -83,6 +81,7 @@
 1. **파일 삭제 금지**: `rm`, `git rm`, `git clean` 등. 이름 변경·이동도 총괄의 사전 승인이 필요하다.
 2. **강제 푸시·히스토리 재작성 금지**: `git push --force`/`-f`, `--force-with-lease`, `git reset --hard` 후 푸시, `rebase` 후 푸시.
 3. **저장소 밖 작업 금지**: 다른 저장소, 사용자와 무관한 다른 세션에 지시하기, 외부 서비스에 게시하기.
+   같은 저장소라도 이 체계가 만들지 않은 브랜치·세션(`TODO.md` 세션 등록부의 "관리 밖")은 **읽기만** 한다.
 4. **`main` 직접 푸시·병합 금지**: `main` 병합은 사용자가 확인한 뒤 직접 한다.
 5. PR은 사용자가 요청할 때만 만든다.
 
@@ -120,40 +119,59 @@
 
 ## 5. 총괄 세션 플레이북
 
-### 5.1 서브에이전트에게 맡기기
-- `Agent` 도구. 여러 파일을 바꾸는 작업이면 `isolation: "worktree"`, 싼 작업이면 `model: "sonnet"`.
-- 프롬프트 템플릿:
+근거 자료: `docs/orchestration-research.md` (T-016: Anthropic 공식 문서·엔지니어링 글, 커뮤니티 글, 영상 목록)
+
+### 5.1 직접 할까, 맡길까
+- **총괄이 직접**: 한 파일·한 레인 안에서 10분 안에 끝나는 일, L0 파일, 병합·검증.
+- **서브에이전트**: 서로 독립적이고 출력이 큰 일(조사, 한 레인 안의 30분 이내 구현, 리뷰).
+- **작업 세션**: 30분 넘는 일, 총괄이 끝나도 계속돼야 하는 일, 결과를 자기 브랜치에 남겨야 하는 일.
+- 여러 에이전트를 쓰면 토큰을 훨씬 많이 쓴다(Anthropic 글 기준 일반 채팅의 약 15배). **쪼갤 이유가 없으면 쪼개지 않는다.**
+- 맡기기 전에 `TODO.md` "진행 중"에 **계획을 먼저 적는다**: 목표 / 파일 범위 / 완료 기준(실행 명령) / 상한 / 위험.
+
+### 5.2 서브에이전트에게 맡기기
+- `Agent` 도구. 다른 작업자와 파일이 겹칠 수 있으면 `isolation: "worktree"`, 싼 작업이면 `model: "sonnet"`.
+- 서브에이전트는 총괄의 대화 내용을 모른다. **중요한 규칙은 프롬프트에 다시 적는다.** 프롬프트 템플릿:
   ```
   너는 my-first-game의 서브에이전트야. 먼저 CLAUDE.md와 TODO.md를 읽어.
   작업: <작업ID> <제목> / 레인: <L?> / 수정 가능 파일: <경로>
-  할 일: <구체적 내용, 완료 기준>
-  규칙: 레인 밖 파일 수정 금지, 파일 삭제 금지, 푸시 금지, TODO.md 수정 금지.
-  끝나면 reports/<작업ID>.md를 쓰고(worktree면 그 안에서 커밋), 최종 답변에 한 일·바뀐 파일·검증 결과를 요약해.
+  할 일: <구체적 내용>
+  완료 기준(명령): <예: npm test 통과, npm run build 성공>
+  상한: 도구 호출 약 <N>회, 검색 <N>번. 넘으면 멈추고 그때까지 결과를 보고해.
+  규칙: 수정 가능 파일 밖은 읽기만, 파일 삭제 금지, 푸시 금지, TODO.md 수정 금지.
+  30분 넘게 걸리면 중간 커밋(worktree일 때)과 보고서 초안을 먼저 남겨.
+  끝나면 reports/<작업ID>.md를 쓰고, 최종 답변에 한 일·바뀐 파일·완료 기준 명령 결과를 요약해.
   ```
-- **worktree 주의 (T-004에서 확인)**: worktree는 `main`에서 시작해서 그 안에는 `CLAUDE.md`, `TODO.md`가 없을 수 있다. 프롬프트에 다음을 넣는다.
+- **worktree 주의 (T-004)**: worktree는 `main`에서 시작한다. 프롬프트에 다음을 넣는다.
   - "규칙 파일은 `/home/user/my-first-game/CLAUDE.md`, `/home/user/my-first-game/TODO.md`에서 읽어."
-  - "작업 전에 worktree 안에서 `git merge --ff-only claude/vibrant-archimedes-t0utvy`를 한 번 실행해서 통합 브랜치 기준으로 맞춰." (아직 검증하지 않은 권장 사항이다. 실패하면 보고만 하게 한다.)
+  - "먼저 worktree 안에서 `git merge --ff-only claude/vibrant-archimedes-t0utvy`를 실행하고, 그다음 `npm ci`를 실행해." (`--ff-only`는 미검증, T-015. 실패하면 보고만)
   - "git 명령은 하나씩 따로 실행하고(`&&`, heredoc 금지), 파일은 Write 도구로 써."
-- 결과가 오면: 변경을 검토 → (worktree면 메인 체크아웃에서 `git merge --no-ff worktree-agent-<id>`) → 통합 브랜치에 푸시 → `TODO.md` 갱신.
-- 끝난 worktree 폴더는 지우지 않는다(삭제 금지). `.gitignore`에 들어 있고, 컨테이너가 회수되면 함께 사라진다.
+- 끝난 worktree 폴더는 지우지 않는다(삭제 금지). `.gitignore`에 있고, 컨테이너가 회수되면 함께 사라진다.
 
-### 5.2 작업 세션 만들기
+### 5.3 작업 세션 만들기
 - `create_session`: `source_url=https://github.com/leoceo99/my-first-game`, `source_revision=<통합 브랜치>`,
-  `outcome_branch=claude/<레인>-<작업ID>`, `title="[작업ID] 제목"`, `tags=["my-first-game:worker"]`.
-- 프롬프트는 5.1 템플릿에서 "푸시 금지"를 "**자기 브랜치(`claude/<레인>-<작업ID>`)에만 푸시**"로 바꿔 쓴다.
+  `outcome_branch=claude/<레인>-<작업ID>`, `title="[작업ID] 제목"`, `tags=["my-first-game:worker"]`, `model="claude-sonnet-5-5"`(싼 작업).
+- 프롬프트는 5.2 템플릿에서 "푸시 금지"를 "**자기 브랜치(`claude/<레인>-<작업ID>`)에만 푸시**"로 바꾸고, 마지막에 다음을 붙인다:
+  "끝나면 `mcp__claude-code-remote__send_message`로 session_id `<총괄 세션 ID>`에 한 줄 보고: `<작업ID> 완료: 커밋 <해시>, 테스트 <N>개 통과, 빌드 <성공/실패>`. 막히면 이유를 한 줄로 보내고 멈춰."
 - 만든 즉시 `TODO.md` "세션 등록부"와 "진행 중"에 세션 ID와 브랜치를 적는다.
+- 보고가 안 올 경우를 대비해 `send_later(delay_minutes=40, ...)`로 점검 예약을 건다.
 
-### 5.3 감독·지시
+### 5.4 감독과 병합 전 체크리스트
 - 상태: `get_session(session_id)` → `status_bucket`(working / blocked / review_ready / completed / failed).
-- 대화 확인: `list_events(session_id, kinds=["result"], limit=5)` → 각 턴의 최종 답만 본다(`assistant`까지 넣으면 출력이 매우 길다).
-- 작업 세션이 보낸 답장: `ReadNotifications`로 읽는다(`send_message`로 온 메시지가 알림함에 쌓인다).
+- 대화: `list_events(session_id, kinds=["result"], limit=5)` (`assistant`까지 넣으면 출력이 매우 길다).
+- 답장: `ReadNotifications`. 추가 지시: `send_message(session_id, message, priority="later")`. 진로가 틀어졌으면 `interrupt_session` 후 지시.
+- **병합 전 체크리스트** (보고서만 믿고 병합하지 않는다. T-012에서 실제로 쓴 절차):
+  1. `git fetch origin <작업 브랜치>` → `git diff --stat <통합 브랜치>...origin/<작업 브랜치>`로 **허용 범위 밖 파일이 없는지** 확인
+  2. 코드를 읽고 검토한다. diff가 크면 검토 전용 서브에이전트(Sonnet, 읽기 전용)에게 리뷰를 맡길 수 있다.
+  3. `git merge --no-ff` 후 총괄이 **직접** `npm ci`, `npm test`, `npm run build` 실행
+  4. 화면이 바뀌었으면 `npx vite preview` + Playwright로 실제 동작 확인(예: 키 입력 → 이동 거리, 콘솔 오류 없음)
+  5. 보고서의 "남은 일 / 위험"을 Backlog에 옮긴다
+  6. 푸시 후 GitHub Actions 결과 확인(MCP `actions_list`)
+- 같은 작업이 2번 실패하면 더 작게 쪼개서 다시 맡긴다.
 - 끝난 작업 세션은 그대로 두면 쉬는 상태로 남고 사용량을 쓰지 않는다. 보관(archive)은 사용자가 정리할 때 한다.
-- 추가 지시: `send_message(session_id, message)`. 진로가 틀어졌으면 `interrupt_session` 후 지시한다.
-- 결과 받기: `git fetch origin claude/<레인>-<작업ID>` → 검토 → `git merge --no-ff` → 통합 브랜치 푸시.
 
-### 5.4 정기 점검
+### 5.5 정기 점검
 - 1회 점검: `send_later(delay_minutes=N, message=...)` → 지정한 시간에 총괄 세션에 메시지가 도착한다.
-- 반복 점검: `create_trigger`(최소 1시간 간격). 필요 없어지면 `update_trigger(enabled=false)`로 끈다.
+- 반복 점검: `create_trigger`(최소 1시간 간격). 작업 세션이 오래 돌 때만 쓰고, 필요 없어지면 `update_trigger(enabled=false)`로 끈다.
 
 ---
 
