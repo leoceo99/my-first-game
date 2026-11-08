@@ -27,7 +27,7 @@
 | 기능 | 결과 | 핵심 사용법 |
 |---|---|---|
 | 서브에이전트 | ✅ | `Agent` 도구, 백그라운드 실행. 끝나면 보고가 자동으로 온다. 비용을 줄이려면 `model: "sonnet"` |
-| 서브에이전트 worktree 격리 | ✅ 주의 | `isolation: "worktree"`. **`main`에서 갈라지고**, 안에서 복합 명령(`&&`, heredoc)이 거부됨 → 5.2 |
+| 서브에이전트 worktree 격리 | ✅ 주의 | `isolation: "worktree"`. **`main`에서 갈라지므로** 먼저 `--ff-only`로 맞춘다(T-015 검증). 안에서 복합 명령이 거부될 수 있음 → 5.2 |
 | 병렬 작업 | ✅ | 서브에이전트 + 작업 세션 동시 실행. 동시 3개 이하(사용량 경고 시 2개) |
 | 작업 세션 생성·확인·지시·답장 | ✅ | `create_session` / `get_session`, `list_events(kinds=["result"], limit=5)` / `send_message` / 답장은 총괄 알림함(`ReadNotifications`) |
 | 작업 세션 브랜치 → 총괄 병합 | ✅ (T-012) | 작업 세션이 자기 브랜치에 푸시 → 총괄이 `git fetch` → 5.4 체크리스트 → `git merge --no-ff` |
@@ -143,7 +143,7 @@
   ```
 - **worktree 주의 (T-004)**: worktree는 `main`에서 시작한다. 프롬프트에 다음을 넣는다.
   - "규칙 파일은 `/home/user/my-first-game/CLAUDE.md`, `/home/user/my-first-game/TODO.md`에서 읽어."
-  - "먼저 worktree 안에서 `git merge --ff-only claude/vibrant-archimedes-t0utvy`를 실행하고, 그다음 `npm ci`를 실행해." (`--ff-only`는 미검증, T-015. 실패하면 보고만)
+  - "먼저 worktree 안에서 `git merge --ff-only claude/vibrant-archimedes-t0utvy`를 실행하고, 그다음 `npm ci`를 실행해." (T-013에서 검증됨. 실패하면 보고만)
   - "git 명령은 하나씩 따로 실행하고(`&&`, heredoc 금지), 파일은 Write 도구로 써."
 - 끝난 worktree 폴더는 지우지 않는다(삭제 금지). `.gitignore`에 있고, 컨테이너가 회수되면 함께 사라진다.
 
