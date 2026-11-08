@@ -1,0 +1,52 @@
+# T-014: 모든 브랜치 푸시와 PR에서 테스트·빌드를 돌리고, main에 푸시되면 GitHub Pages에 배포한다.
+# 배포가 되려면 저장소 Settings → Pages → Source를 "GitHub Actions"로 바꿔야 한다 (TODO.md U-03).
+name: CI & Pages
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # 게임 골격(package-lock.json)이 없는 브랜치에서는 아래 단계를 건너뛴다.
+      - uses: actions/setup-node@v4
+        if: hashFiles('package-lock.json') != ''
+        with:
+          node-version: 22
+          cache: npm
+      - if: hashFiles('package-lock.json') != ''
+        run: npm ci
+      - if: hashFiles('package-lock.json') != ''
+        run: npm test
+      - if: hashFiles('package-lock.json') != ''
+        run: npm run build
+      - name: Upload Pages artifact (main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && hashFiles('package-lock.json') != ''
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test-build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
