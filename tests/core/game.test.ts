@@ -5,6 +5,7 @@ import {
   MOVE_SPEED,
   JUMP_SPEED,
   MAX_FALL_SPEED,
+  ENEMY_SPEED,
   type GameState,
   type Input,
 } from '../../src/core/game';
@@ -133,7 +134,7 @@ describe('game', () => {
   });
 
   it('월드 좌우 경계에서 멈춘다', () => {
-    let g = run(createGame(), { ...none, right: true }, 5);
+    let g = run({ ...createGame(), enemies: [] }, { ...none, right: true }, 5);
     expect(g.player.x).toBe(g.width - g.player.width);
     g = run(g, { ...none, left: true }, 5);
     expect(g.player.x).toBe(0);
@@ -152,5 +153,82 @@ describe('game', () => {
     const snapshot = JSON.parse(JSON.stringify(g));
     update(g, { left: true, right: false, jump: true }, 0.3);
     expect(g).toEqual(snapshot);
+  });
+
+  it('점프는 누른 순간에만 한 번 한다 (계속 눌러도 착지 후 다시 뛰지 않는다)', () => {
+    const jump = { ...none, jump: true };
+    let g = run({ ...createGame(), enemies: [] }, jump, 2);
+    expect(g.player.onGround).toBe(true);
+    expect(g.player.y).toBe(createGame().player.y);
+    // 떼었다가 다시 누르면 다시 점프한다
+    g = run(g, none, DT);
+    g = update(g, jump, DT);
+    expect(g.player.y).toBeLessThan(createGame().player.y);
+  });
+
+  it('코인에 닿으면 사라지고 점수가 1 오른다', () => {
+    const g0 = createGame();
+    const c = g0.coins[0];
+    const g = update(withPlayer(g0, { x: c.x, y: c.y, onGround: false }), none, DT);
+    expect(g.score).toBe(1);
+    expect(g.coins.length).toBe(g0.coins.length - 1);
+    expect(g.coins).not.toContainEqual(c);
+    expect(g.status).toBe('playing');
+  });
+
+  it('적은 순찰 구간 끝에서 방향을 바꾼다', () => {
+    const g0 = { ...createGame(), player: { ...createGame().player, x: 0 } };
+    const e0 = g0.enemies[0];
+    let g = update(g0, none, DT);
+    expect(g.enemies[0].x - e0.x).toBeCloseTo(ENEMY_SPEED * DT);
+    let sawLeft = false;
+    for (let i = 0; i < 180; i++) {
+      g = update({ ...g, status: 'playing' }, none, DT);
+      const e = g.enemies[0];
+      expect(e.x).toBeGreaterThanOrEqual(e.minX);
+      expect(e.x).toBeLessThanOrEqual(e.maxX);
+      if (e.vx < 0) sawLeft = true;
+    }
+    expect(sawLeft).toBe(true);
+  });
+
+  it('적과 닿으면 gameover', () => {
+    const g0 = createGame();
+    const e = g0.enemies[1];
+    const g = update(withPlayer(g0, { x: e.x, y: e.y - 5, onGround: false }), none, DT);
+    expect(g.status).toBe('gameover');
+  });
+
+  it('gameover 중에는 움직이지 않는다', () => {
+    const g0 = { ...createGame(), status: 'gameover' as const };
+    const g = update(g0, { ...none, right: true }, 0.5);
+    expect(g.player).toEqual(g0.player);
+    expect(g.enemies).toEqual(g0.enemies);
+    expect(g.status).toBe('gameover');
+  });
+
+  it('gameover에서 점프를 새로 누르거나 restart면 처음부터 다시 시작한다', () => {
+    const dead = { ...createGame(), score: 3, status: 'gameover' as const };
+    const a = update(dead, { ...none, restart: true }, DT);
+    expect(a.status).toBe('playing');
+    expect(a.score).toBe(0);
+    expect(a.coins.length).toBe(a.totalCoins);
+    const b = update(dead, { ...none, jump: true }, DT);
+    expect(b.status).toBe('playing');
+    expect(b.score).toBe(0);
+    // 점프를 계속 누르고 있었다면 재시작되지 않는다
+    const held = update({ ...dead, jumpHeld: true }, { ...none, jump: true }, DT);
+    expect(held.status).toBe('gameover');
+  });
+
+  it('모든 코인을 먹으면 clear', () => {
+    const g0 = createGame();
+    const last = g0.coins[0];
+    const g1 = { ...g0, coins: [last], enemies: [], totalCoins: g0.coins.length };
+    const g = update(withPlayer(g1, { x: last.x, y: last.y, onGround: false }), none, DT);
+    expect(g.coins.length).toBe(0);
+    expect(g.status).toBe('clear');
+    const again = update(g, { ...none, restart: true }, DT);
+    expect(again.status).toBe('playing');
   });
 });
