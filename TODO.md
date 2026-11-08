@@ -37,7 +37,7 @@
 
 | ID | 작업 | 담당 | 브랜치 | 시작 | 상태 / 다음 단계 |
 |---|---|---|---|---|---|
-| T-012 | 게임 골격: Vite+TS 설정, 빈 캔버스, 방향키로 움직이는 네모, Vitest 첫 테스트. 파일 범위: L1 + L2 + **위임된 L0 파일**(`package.json`, `package-lock.json`, `tsconfig.json`, `vite.config.ts`) + `reports/T-012.md` | 작업 세션 (Sonnet) | `claude/L1-T-012` | 11-08 | 시작 |
+| T-012 | 게임 골격: Vite+TS 설정, 빈 캔버스, 방향키로 움직이는 네모, Vitest 첫 테스트. 파일 범위: L1 + L2 + **위임된 L0 파일**(`package.json`, `package-lock.json`, `tsconfig.json`, `vite.config.ts`) + `reports/T-012.md` | 작업 세션 `session_01BfrX51r3adh4mipYSByyxB` (Sonnet) | `claude/L1-T-012` | 11-08 03:10 | 실행 중. 끝나면 `send_message`로 보고 예정. 대비 점검 예약 있음 |
 | T-016 | 여러 세션·서브에이전트 관리 방법 자료 조사(공식 문서, 블로그, 유튜브) → `docs/orchestration-research.md`. 파일 범위: L3 + `reports/T-016.md` | 서브에이전트 (Sonnet) | (공유 작업 트리, 커밋 안 함) | 11-08 | 시작 |
 
 ---
@@ -106,4 +106,5 @@
 |---|---|---|---|---|---|
 | 총괄 세션 | `session_01BfrX53CHWvJYbgaip4CsNq` | 총괄 | `claude/vibrant-archimedes-t0utvy` | 실행 중 | |
 | 작업 세션 | `session_01BfrX54BgLQ8Mg9jKF8Y3Mi` | T-005 | `claude/test-T-005` (푸시 없음) | 완료, 쉬는 중 | 사용자가 정리할 때 보관하면 됨 |
+| 작업 세션 | `session_01BfrX51r3adh4mipYSByyxB` | T-012 | `claude/L1-T-012` | 실행 중 | 11-08 03:10 시작 |
 | 서버 예약(1회) | `trig_01DoxRvLPaXRPz3bE1KAGcUN` | T-006 | - | 실행 완료 (17:04:39 UTC) | 1회용이라 자동으로 꺼짐 |
