@@ -16,6 +16,7 @@ export interface Input {
   left: boolean;
   right: boolean;
   jump: boolean;
+  restart?: boolean;
 }
 
 export interface Rect {
@@ -30,26 +31,69 @@ export interface Player extends Rect {
   onGround: boolean;
 }
 
+export interface Enemy extends Rect {
+  vx: number; // 가로 속도 (오른쪽이 +)
+  minX: number; // 순찰 구간 왼쪽 끝 (x의 최솟값)
+  maxX: number; // 순찰 구간 오른쪽 끝 (x의 최댓값)
+}
+
+export type Status = 'playing' | 'gameover' | 'clear';
+
+export interface Level {
+  platforms: Rect[];
+  coins: Rect[];
+  enemies: Enemy[];
+}
+
 export interface GameState {
   width: number;
   height: number;
   player: Player;
   platforms: Rect[];
+  coins: Rect[];
+  enemies: Enemy[];
+  totalCoins: number;
+  score: number;
+  status: Status;
+  jumpHeld: boolean; // 이전 프레임의 jump 입력 (누른 순간만 점프하기 위해)
 }
 
-export function createLevel(): Rect[] {
-  return [
-    // 바닥
-    { x: 0, y: WORLD_HEIGHT - GROUND_HEIGHT, width: WORLD_WIDTH, height: GROUND_HEIGHT },
-    // 떠 있는 발판 (점프 높이 약 117px 이내로 이어진다)
-    { x: 120, y: 330, width: 140, height: 20 },
-    { x: 340, y: 250, width: 140, height: 20 },
-    { x: 580, y: 330, width: 140, height: 20 },
-  ];
+const COIN_SIZE = 20;
+export const ENEMY_SIZE = 30;
+export const ENEMY_SPEED = 80; // px/s
+
+const coin = (x: number, y: number): Rect => ({ x, y, width: COIN_SIZE, height: COIN_SIZE });
+const patrolEnemy = (x: number, y: number, minX: number, maxX: number): Enemy => ({
+  x, y, width: ENEMY_SIZE, height: ENEMY_SIZE, vx: ENEMY_SPEED, minX, maxX,
+});
+
+export function createLevel(): Level {
+  return {
+    platforms: [
+      // 바닥
+      { x: 0, y: WORLD_HEIGHT - GROUND_HEIGHT, width: WORLD_WIDTH, height: GROUND_HEIGHT },
+      // 떠 있는 발판 (점프 높이 약 117px 이내로 이어진다)
+      { x: 120, y: 330, width: 140, height: 20 },
+      { x: 340, y: 250, width: 140, height: 20 },
+      { x: 580, y: 330, width: 140, height: 20 },
+    ],
+    coins: [
+      coin(50, 380), // 바닥 왼쪽
+      coin(170, 300), // 발판 1 위
+      coin(290, 340), // 발판 1과 2 사이 (공중)
+      coin(400, 200), // 발판 2 위
+      coin(630, 300), // 발판 3 위
+      coin(740, 380), // 바닥 오른쪽
+    ],
+    enemies: [
+      patrolEnemy(340, 220, 340, 450), // 발판 2 위 (발판 340~480)
+      patrolEnemy(600, 380, 480, 770), // 바닥 오른쪽 구간
+    ],
+  };
 }
 
 export function createGame(): GameState {
-  const platforms = createLevel();
+  const { platforms, coins, enemies } = createLevel();
   return {
     width: WORLD_WIDTH,
     height: WORLD_HEIGHT,
@@ -62,6 +106,12 @@ export function createGame(): GameState {
       onGround: true,
     },
     platforms,
+    coins,
+    enemies,
+    totalCoins: coins.length,
+    score: 0,
+    status: 'playing',
+    jumpHeld: false,
   };
 }
 
@@ -72,6 +122,22 @@ const overlapsX = (p: Rect, r: Rect): boolean =>
   p.x + p.width > r.x + EPS && p.x < r.x + r.width - EPS;
 const overlapsY = (p: Rect, r: Rect): boolean =>
   p.y + p.height > r.y + EPS && p.y < r.y + r.height - EPS;
+
+const touches = (a: Rect, b: Rect): boolean =>
+  a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+
+function moveEnemy(e: Enemy, dt: number): Enemy {
+  let x = e.x + e.vx * dt;
+  let vx = e.vx;
+  if (x <= e.minX) {
+    x = e.minX;
+    vx = Math.abs(vx);
+  } else if (x >= e.maxX) {
+    x = e.maxX;
+    vx = -Math.abs(vx);
+  }
+  return { ...e, x, vx };
+}
 
 function step(state: GameState, input: Input, dt: number): GameState {
   let { x, y, vy, onGround } = state.player;
@@ -110,14 +176,35 @@ function step(state: GameState, input: Input, dt: number): GameState {
   // 월드 좌우 경계
   x = clamp(x, 0, state.width - width);
 
-  return { ...state, player: { ...state.player, x, y, vy, onGround } };
+  const player = { ...state.player, x, y, vy, onGround };
+
+  // 적 순찰
+  const enemies = state.enemies.map((e) => moveEnemy(e, dt));
+
+  // 코인 먹기
+  const coins = state.coins.filter((c) => !touches(player, c));
+  const score = state.score + (state.coins.length - coins.length);
+
+  let status: Status = 'playing';
+  if (enemies.some((e) => touches(player, e))) status = 'gameover';
+  else if (coins.length === 0) status = 'clear';
+
+  return { ...state, player, enemies, coins, score, status };
 }
 
 export function update(state: GameState, input: Input, dtSeconds: number): GameState {
+  const pressed = input.jump && !state.jumpHeld; // 이번 프레임에 막 누름
+  if (state.status !== 'playing') {
+    if (pressed || input.restart) return { ...createGame(), jumpHeld: input.jump };
+    return state.jumpHeld === input.jump ? state : { ...state, jumpHeld: input.jump };
+  }
   if (!(dtSeconds > 0)) return state;
   const n = Math.ceil(dtSeconds / MAX_STEP - EPS);
   const dt = dtSeconds / n;
   let s = state;
-  for (let i = 0; i < n; i++) s = step(s, input, dt);
-  return s;
+  for (let i = 0; i < n && s.status === 'playing'; i++) {
+    // 점프는 누른 순간(첫 하위 단계)에만 적용한다
+    s = step(s, { ...input, jump: i === 0 && pressed }, dt);
+  }
+  return { ...s, jumpHeld: input.jump };
 }
