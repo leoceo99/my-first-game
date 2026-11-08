@@ -9,8 +9,12 @@
 
 - 저장소: `leoceo99/my-first-game`
 - 목표(README): **"Action에서 사용할 게임 만들기"**
-- 현재 상태: 게임 코드는 아직 없다. 장르·플랫폼·기술 스택은 **사용자 결정 대기** (`TODO.md`의 "결정 필요" 참고).
-  게임 방향 후보는 `docs/game-ideas.md`에 정리되어 있다.
+- 게임 방향(**잠정**, 11-08 총괄 결정, `TODO.md` T-010): **브라우저 2D 액션 게임**. 캐릭터가 움직이고 점프하며 적을 피해 코인을 모은다.
+  GitHub Actions가 GitHub Pages로 자동 배포한다. 다른 후보는 `docs/game-ideas.md`에 있다. 사용자가 바꾸면 따른다.
+- 기술 스택: **TypeScript + Vite + Canvas 2D**(게임 엔진 없음), 테스트는 **Vitest**, 패키지 관리는 **npm**.
+  - 게임 규칙(`src/core`)은 순수 TypeScript로 쓰고 DOM·브라우저 API를 쓰지 않는다. 그래야 Vitest로 바로 테스트할 수 있다.
+  - 화면·입력(`src/ui`)만 Canvas, 키보드, 터치를 다룬다.
+- 명령(T-012에서 확정): `npm install` → `npm run dev`(개발 서버) / `npm test`(테스트) / `npm run build`(배포용 빌드)
 - 기본 브랜치: `main` (사용자만 병합한다)
 - 통합 브랜치(총괄 세션용): `claude/vibrant-archimedes-t0utvy`
 
@@ -59,13 +63,14 @@
 
 | 레인 | 담당 | 수정할 수 있는 파일 |
 |---|---|---|
-| **L0 총괄** | 총괄 세션만 | `CLAUDE.md`, `TODO.md`, `README.md`, `.claude/**`, `.github/**`, `.gitignore`, `docs/permissions.md`, 루트 설정 파일(`package.json` 등) |
-| **L1 게임 로직** | 작업 세션 / 서브에이전트 | `src/core/**`, `tests/core/**` |
-| **L2 화면·입력·에셋** | 작업 세션 / 서브에이전트 | `src/ui/**`, `assets/**`, `tests/ui/**` |
-| **L3 문서·조사** | 작업 세션 / 서브에이전트 | `docs/**` |
+| **L0 총괄** | 총괄 세션만 | `CLAUDE.md`, `TODO.md`, `README.md`, `.claude/**`, `.github/**`, `.gitignore`, `docs/permissions.md`, 루트 설정 파일(`package.json`, `package-lock.json`, `tsconfig.json`, `vite.config.ts`) |
+| **L1 게임 로직** | 작업 세션 / 서브에이전트 | `src/core/**`, `tests/core/**` (DOM·브라우저 API 금지) |
+| **L2 화면·입력·에셋** | 작업 세션 / 서브에이전트 | `index.html`, `src/ui/**`, `public/**`, `tests/ui/**` |
+| **L3 문서·조사** | 작업 세션 / 서브에이전트 | `docs/**` (`docs/permissions.md` 제외) |
 | **보고서** | 각 작업자 | `reports/<작업ID>.md` (자기 작업 ID 파일만) |
 
-- 레인 경로는 기술 스택이 정해지면 총괄이 이 표를 고친다(T-011).
+- **위임**: 총괄은 작업 하나에 한해 다른 레인이나 L0 파일의 수정 권한을 줄 수 있다. 위임한 파일은 `TODO.md`의 그 작업 행 "파일 범위"에 적는다. 적혀 있지 않으면 권한이 없다.
+- 새 디렉터리가 필요하면 총괄이 이 표에 먼저 추가한다.
 - 레인 밖 파일 수정이 필요하면 직접 고치지 말고, 보고서의 "총괄에게 요청"에 적는다.
 - **`TODO.md`는 총괄만 고친다.** 작업자는 `reports/<작업ID>.md`에만 결과를 쓴다(작업 ID마다 파일이 달라서 충돌이 없다).
 - 같은 레인에 작업자 두 명을 동시에 배정하지 않는다. 꼭 필요하면 서브에이전트를 `isolation: "worktree"`로 돌린다.
