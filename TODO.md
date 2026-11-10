@@ -6,7 +6,7 @@
 마지막 갱신: 2026-11-10 12:25 UTC (총괄 세션 `session_01BfrX53CHWvJYbgaip4CsNq`)
 
 ## 지금 상태 한 줄 요약 (다음 세션은 여기부터)
-목표가 **자비스(모든 Claude 세션을 관리하는 비서)**로 확정됐다(11-10). 게임 코드는 `claude/game-prototype`로 분리했다. **상황판**(https://claude.ai/artifact/5ZCwN5t4XzQWUwJk48PEjz)과 **정기 브리핑**(브리핑 전용 세션 `session_01BfrX51PuxE77gz1N787Ykw`를 8시간마다 깨우는 `trig_01SDsYw2dPkaCo3ZBcYGCcra`)이 생겼다. 지금은 첫 시험 브리핑 결과 확인(J-002)과 명령 사전(J-003)을 진행 중이다.
+목표가 **자비스(모든 Claude 세션을 관리하는 비서)**로 확정됐다(11-10). 게임 코드는 `claude/game-prototype`로 분리했다. **상황판**(https://claude.ai/artifact/5ZCwN5t4XzQWUwJk48PEjz)과 **정기 브리핑**(브리핑 전용 세션 `session_01BfrX51PuxE77gz1N787Ykw`를 8시간마다 깨우는 `trig_01SDsYw2dPkaCo3ZBcYGCcra`)이 생겼다. 첫 브리핑이 성공했다(J-002). 지금은 명령 사전(J-003)을 진행 중이다.
 사용량: 11-10 12:09 UTC 확인 때 `five_hour / rejected`로 표시됐지만 초기화 시각이 지난 기록이었다. 단계마다 커밋·푸시하고, 작업자는 Sonnet을 쓴다.
 
 ---
@@ -39,6 +39,7 @@
 | J-009 | 브리핑 전용 세션 교대: 대화가 쌓이면(예: 20회 실행마다) 새 브리핑 세션을 만들고 예약의 `persistent_session_id`를 바꾼다 | L0 | 총괄 | J-002 | 비용 관리 |
 | J-007 | (아이디어) 상황판에서 버튼으로 승인·명령 → 다음 브리핑/총괄이 실행 | L2 | - | J-004 | |
 | J-008 | (아이디어) 세션별 비용·사용량 추이 그래프 | L2 | - | J-002 | |
+| J-010 | 브리핑 개선: `summary.updatedAt`을 모델이 짐작하지 말고 `date -u`로 찍기(시험 실행에서 실제보다 2분 늦은 시각이 기록됨) | L1 | 총괄 | - | 작은 수정 |
 
 ---
 
@@ -46,7 +47,6 @@
 
 | ID | 작업 (계획) | 담당 | 브랜치 | 시작 | 상태 / 다음 단계 |
 |---|---|---|---|---|---|
-| J-002 | **정기 브리핑 켜기**. 1차(실행마다 새 세션 `trig_01NPVoWpNSjo35ZgcWdjDQXK`)는 새 세션에 세션 조회 도구가 없어 실패 → 꺼 둠. 2차: 브리핑 전용 세션 `session_01BfrX51PuxE77gz1N787Ykw`(Sonnet)를 만들고 `trig_01SDsYw2dPkaCo3ZBcYGCcra`(`18 */8 * * *` UTC)가 깨움. 그 세션의 첫 실행이 곧 시험 브리핑. **완료 기준**: 상황판 `board/summary.updatedAt`이 새 시각으로 바뀜 | 총괄 | - | 11-10 12:18 | 시험 브리핑 결과 확인 중 |
 | J-003 | 명령 사전 `jarvis/commands.md`. **파일**: `jarvis/commands.md`, `reports/J-003.md`. **완료 기준**: 명령 표·스스로 하는 일·하지 않는 일·시작하기, 150줄 이내. **상한**: 도구 호출 약 15회 | 서브에이전트 (Sonnet, 공유 작업 트리, 커밋은 총괄) | - | 11-10 12:19 | 실행 중 |
 
 ---
@@ -55,6 +55,7 @@
 
 | ID | 작업 | 담당 | 결과 | 날짜 |
 |---|---|---|---|---|
+| J-002 | 정기 브리핑: 브리핑 전용 세션 `session_01BfrX51PuxE77gz1N787Ykw`(Sonnet) + 예약 `trig_01SDsYw2dPkaCo3ZBcYGCcra`(8시간마다). 1차 방식(실행마다 새 세션)은 세션 조회 도구가 없어 실패 → 꺼 둠 | 총괄 | ✅ 첫 브리핑 12:18 UTC 성공(약 38초, $0.32): "이상 없음 — 세션 6개, 결정 대기 5건, 정리 제안 6건". 상황판 DB가 version 2로 갱신된 것을 총괄이 확인. 푸시 알림은 "중요"가 없어 아직 미확인 | 11-10 |
 | J-001 | 상황판 Artifact(일반 페이지 + DB, 한국어, 모바일·다크 모드) + 브리핑 지시문 `jarvis/briefing.md` + 시험 브리핑 1회 | 작업 세션 `session_01BfrX52x2XYeTVLFYMoKjXF` (Sonnet) | ✅ 약 2분. 범위 밖 파일 없음. 병합. **총괄 확인**: 상황판 DB `board/summary`에 세션 6개 데이터 저장됨. Dashboard 타입은 세션이 직접 모은 데이터를 넣기에 맞지 않아 일반 페이지 + DB로 바꿈(빈 Artifact 하나 남음 → U-06) | 11-10 |
 | J-000 | 방향 전환: 게임 → 자비스. 게임 코드를 `claude/game-prototype`(커밋 `21beff1`)로 분리, 통합 브랜치에서 코드·설정 제거(사용자 승인), `CLAUDE.md`·`TODO.md`를 자비스 기준으로 재작성 | 총괄 | ✅ 커밋 `8ed3405` 외 | 11-10 |
 
@@ -74,7 +75,8 @@
 | 서브에이전트 (`Agent`, 백그라운드, Sonnet, worktree) | ✅ worktree는 `main` 기준 → `--ff-only`로 맞춘다 |
 | 서버 예약 `send_later` / `update_trigger(enabled=false)` | ✅ 쉬고 있는 총괄 세션을 깨운다 |
 | `create_trigger`(실행마다 새 세션) | ⚠️ 생성·실행은 되지만 **새 세션에 `claude-code-remote` 도구가 없다** → 세션 조회 불가(J-002 시험, Sonnet으로 실행됨, $0.19). 브리핑은 안전하게 실패하고 기존 데이터를 덮어쓰지 않았다. 해결: 전용 세션을 `persistent_session_id`로 깨운다. 이 방식은 예약의 푸시 알림 옵션을 못 쓰므로 세션이 `PushNotification`을 직접 호출 |
-| 예약 세션에서 상황판 DB 쓰기 | 미확인 → J-002에서 확인 |
+| 브리핑 전용 세션(직접 만든 작업 세션)에서 세션 조회 + 상황판 DB 쓰기 | ✅ (J-002) |
+| 브리핑 세션의 `PushNotification` | 미확인 ("중요"일 때만 호출) |
 | `CronCreate` | ⚠️ 메모리에만 있어 비추천 |
 | `ListAgents`/`SendMessage` | ⚠️ 클라우드 세션은 안 보임 → `send_message` 사용 |
 | GitHub MCP (브랜치, Actions), 워크플로 파일 푸시 | ✅ `gh` CLI는 안 됨 |
