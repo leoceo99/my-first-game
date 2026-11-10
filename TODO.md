@@ -6,7 +6,7 @@
 마지막 갱신: 2026-11-10 12:25 UTC (총괄 세션 `session_01BfrX53CHWvJYbgaip4CsNq`)
 
 ## 지금 상태 한 줄 요약 (다음 세션은 여기부터)
-목표가 **자비스(모든 Claude 세션을 관리하는 비서)**로 확정됐다(11-10). 게임 코드는 `claude/game-prototype`로 분리했다. **상황판**(https://claude.ai/artifact/5ZCwN5t4XzQWUwJk48PEjz)과 **정기 브리핑**(8시간마다, `trig_01NPVoWpNSjo35ZgcWdjDQXK`)이 생겼다. 지금은 J-002 시험 실행 결과를 확인하는 중이다.
+목표가 **자비스(모든 Claude 세션을 관리하는 비서)**로 확정됐다(11-10). 게임 코드는 `claude/game-prototype`로 분리했다. **상황판**(https://claude.ai/artifact/5ZCwN5t4XzQWUwJk48PEjz)과 **정기 브리핑**(브리핑 전용 세션 `session_01BfrX51PuxE77gz1N787Ykw`를 8시간마다 깨우는 `trig_01SDsYw2dPkaCo3ZBcYGCcra`)이 생겼다. 지금은 첫 시험 브리핑 결과 확인(J-002)과 명령 사전(J-003)을 진행 중이다.
 사용량: 11-10 12:09 UTC 확인 때 `five_hour / rejected`로 표시됐지만 초기화 시각이 지난 기록이었다. 단계마다 커밋·푸시하고, 작업자는 Sonnet을 쓴다.
 
 ---
@@ -33,10 +33,10 @@
 
 | ID | 작업 | 레인 | 담당(예정) | 선행 | 비고 |
 |---|---|---|---|---|---|
-| J-003 | **명령 사전** `jarvis/commands.md`: 사용자가 할 수 있는 말("상태 알려줘", "X 해줘", "정리해줘", "○○ 세션에 △△ 전해줘" 등)과 자비스가 하는 일 | L1 | 서브에이전트 | - | `CLAUDE.md` 5.6 |
 | J-004 | **세션 정리 승인 흐름**: 브리핑이 낸 정리 제안을 사용자가 승인하면(채팅 또는 상황판) 총괄이 보관·예약 끄기 실행 | L0+L2 | 총괄 | J-002 | 실행은 승인된 것만 |
 | J-005 | **자기 개선 루프**: 주 1회 예약 작업이 자비스 기록(상황판, `TODO.md`, 보고서)과 Claude Code 새 기능을 살펴 `jarvis/improvements.md`·상황판에 개선안 제출 → 사용자 승인 → 반영 | L1 | 총괄 | J-002 | 예약 세션에는 저장소가 없어서 `add_repo`로 붙이거나 상황판 DB만 씀 |
 | J-006 | **총괄 교대**: 이 세션은 대화가 길어 호출이 비싸다(누적 약 $12). 새 "자비스" 세션이 `CLAUDE.md`+`TODO.md`로 이어받게 한다 | L0 | 총괄 | J-002 | 사용자가 새 세션을 열거나 총괄이 `create_session`으로 만든다 |
+| J-009 | 브리핑 전용 세션 교대: 대화가 쌓이면(예: 20회 실행마다) 새 브리핑 세션을 만들고 예약의 `persistent_session_id`를 바꾼다 | L0 | 총괄 | J-002 | 비용 관리 |
 | J-007 | (아이디어) 상황판에서 버튼으로 승인·명령 → 다음 브리핑/총괄이 실행 | L2 | - | J-004 | |
 | J-008 | (아이디어) 세션별 비용·사용량 추이 그래프 | L2 | - | J-002 | |
 
@@ -46,7 +46,8 @@
 
 | ID | 작업 (계획) | 담당 | 브랜치 | 시작 | 상태 / 다음 단계 |
 |---|---|---|---|---|---|
-| J-002 | **정기 브리핑 켜기**: `create_trigger`(`trig_01NPVoWpNSjo35ZgcWdjDQXK`, 실행마다 새 세션, 푸시 알림, 지시문 = `jarvis/briefing.md`) → `fire_trigger`로 시험 실행 → 새 세션이 상황판 DB를 갱신했는지 확인. **위험**: 생성 결과에 "커넥터 없음" 경고(브리핑에 필요한 세션 조회·Artifact 도구는 기본 도구라 괜찮을 것으로 보지만 시험으로 확인) | 총괄 | - | 11-10 12:16 | 시험 실행 세션 `cse_01BfrX515sVmWD3RCUXwTDnT` 확인 중 |
+| J-002 | **정기 브리핑 켜기**. 1차(실행마다 새 세션 `trig_01NPVoWpNSjo35ZgcWdjDQXK`)는 새 세션에 세션 조회 도구가 없어 실패 → 꺼 둠. 2차: 브리핑 전용 세션 `session_01BfrX51PuxE77gz1N787Ykw`(Sonnet)를 만들고 `trig_01SDsYw2dPkaCo3ZBcYGCcra`(`18 */8 * * *` UTC)가 깨움. 그 세션의 첫 실행이 곧 시험 브리핑. **완료 기준**: 상황판 `board/summary.updatedAt`이 새 시각으로 바뀜 | 총괄 | - | 11-10 12:18 | 시험 브리핑 결과 확인 중 |
+| J-003 | 명령 사전 `jarvis/commands.md`. **파일**: `jarvis/commands.md`, `reports/J-003.md`. **완료 기준**: 명령 표·스스로 하는 일·하지 않는 일·시작하기, 150줄 이내. **상한**: 도구 호출 약 15회 | 서브에이전트 (Sonnet, 공유 작업 트리, 커밋은 총괄) | - | 11-10 12:19 | 실행 중 |
 
 ---
 
@@ -108,7 +109,9 @@
 |---|---|---|---|---|---|
 | 총괄 세션 | `session_01BfrX53CHWvJYbgaip4CsNq` | 총괄 | `claude/vibrant-archimedes-t0utvy` | 실행 중 | 컨텍스트 큼 → J-006 교대 예정 |
 | 작업 세션 | `session_01BfrX52x2XYeTVLFYMoKjXF` | J-001 | `claude/L2-J-001` | 완료, 쉬는 중 | 병합 완료. 정리 후보 |
-| **서버 예약(반복)** | `trig_01NPVoWpNSjo35ZgcWdjDQXK` "자비스 정기 브리핑" | J-002 | - | **켜짐**, 8시간마다(`16 */8 * * *` UTC) | 실행마다 새 세션, 푸시 알림. 지시문을 바꾸면 `update_trigger(prompt=...)`로 같이 바꿀 것 |
+| **브리핑 전용 세션** | `session_01BfrX51PuxE77gz1N787Ykw` "[자비스] 정기 브리핑 (눈)" | J-002 | `claude/jarvis-briefing`(푸시 안 함) | 운영 중 (Sonnet) | 대화가 쌓이면 비싸지므로 주기적으로 새 세션으로 교대(J-009) |
+| **서버 예약(반복)** | `trig_01SDsYw2dPkaCo3ZBcYGCcra` "자비스 정기 브리핑 (전용 세션)" | J-002 | - | **켜짐**, 8시간마다(`18 */8 * * *` UTC) | 위 세션을 깨움. 지시문은 저장소의 `jarvis/briefing.md`를 `git pull`로 받아 씀 |
+| 서버 예약(반복) | `trig_01NPVoWpNSjo35ZgcWdjDQXK` "자비스 정기 브리핑" | J-002 1차 | - | 꺼짐 | 새 세션에 세션 조회 도구가 없어 실패. 정리 후보 |
 | 서버 예약(1회) | `trig_01G3CAzCtN73PVFRwqX5JViL` | J-001 대비 점검 | - | 12:59 UTC 실행 예정 | J-001이 끝나서 필요 없음 → 끔 |
 | 상황판 | https://claude.ai/artifact/5ZCwN5t4XzQWUwJk48PEjz | J-001 | - | 운영 중 | 소유자만 볼 수 있음 |
 | 작업 세션 | `session_01BfrX54BgLQ8Mg9jKF8Y3Mi` | T-005 | `claude/test-T-005` | 완료, 쉬는 중 | 정리 후보 |
