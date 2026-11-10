@@ -7,16 +7,20 @@
 
 ## 1. 프로젝트 소개
 
-- 저장소: `leoceo99/my-first-game`
-- 목표(README): **"Action에서 사용할 게임 만들기"**
-- 게임 방향(**잠정**, 11-08 총괄 결정, `TODO.md` T-010): **브라우저 2D 액션 게임**. 캐릭터가 움직이고 점프하며 적을 피해 코인을 모은다.
-  GitHub Actions가 GitHub Pages로 자동 배포한다. 다른 후보는 `docs/game-ideas.md`에 있다. 사용자가 바꾸면 따른다.
-- 기술 스택: **TypeScript + Vite + Canvas 2D**(게임 엔진 없음), 테스트는 **Vitest**, 패키지 관리는 **npm**.
-  - 게임 규칙(`src/core`)은 순수 TypeScript로 쓰고 DOM·브라우저 API를 쓰지 않는다. 그래야 Vitest로 바로 테스트할 수 있다.
-  - 화면·입력(`src/ui`)만 Canvas, 키보드, 터치를 다룬다.
-- 명령(T-012에서 확정): `npm ci`(설치) → `npm run dev`(개발 서버) / `npm test`(테스트) / `npm run build`(배포용 빌드, `dist/`) / `npm run preview`
-- 기본 브랜치: `main` (사용자만 병합한다)
-- 통합 브랜치(총괄 세션용): `claude/vibrant-archimedes-t0utvy`
+- 저장소: `leoceo99/my-first-game` (저장소 이름과 README는 예전 것이다. 지금 목표는 아래)
+- **목표: 자비스(JARVIS)** — 사용자의 **모든 Claude 세션**을 대신 지켜보고, 요약하고, 일을 맡기고, 정리하고, **스스로 발전하는** 관리 비서 (11-10 사용자 확정)
+- 자비스의 구성:
+
+| 부분 | 하는 일 | 만드는 것 |
+|---|---|---|
+| **두뇌** (총괄 세션) | 사용자와 대화, 계획, 일 맡기기, 검증, 보고 | 이 파일 + `TODO.md` + `jarvis/commands.md`(명령 사전) |
+| **눈** (정기 브리핑) | 정해진 시간마다 모든 세션·예약 작업·사용량을 점검 → 상황판 갱신 → 중요한 일이 있으면 휴대폰 알림 | 서버 예약 작업 + 브리핑 지시문 `jarvis/briefing.md` |
+| **화면** (상황판) | 세션 상태, 하는 일, 결정 대기, 정리 제안, 개선 제안을 링크 하나로 | Artifact 페이지(데이터베이스 포함), 원본 `jarvis/dashboard/` |
+| **손** (작업자) | 실제 작업 | 작업 세션·서브에이전트 (5장) |
+| **성장** (자기 개선) | 주기적으로 자기 기록과 Claude 새 기능을 살펴 개선안을 내고, 승인된 것을 반영 | 주간 예약 작업 + `jarvis/improvements.md` |
+
+- 11-07~08에 체계 시험용으로 만든 게임은 `claude/game-prototype` 브랜치에 보관했다. 더 진행하지 않는다.
+- 기본 브랜치: `main` (사용자만 병합한다). 통합 브랜치(총괄 세션용): `claude/vibrant-archimedes-t0utvy`
 
 ---
 
@@ -35,7 +39,7 @@
 | 세션 안 예약(`CronCreate`) | ⚠️ 비추천 | 메모리에만 있어서 컨테이너가 회수되면 사라진다 |
 | `SendMessage` / `ListAgents` | ⚠️ 대상 없음 | 로컬 피어용. 클라우드 세션끼리는 `send_message` |
 | GitHub | ✅ | MCP 도구(브랜치·PR·Actions 조회). 워크플로 파일 푸시 됨(T-014). PR은 사용자 요청 때만. `gh` CLI 안 됨 |
-| 브라우저 확인 | ✅ (T-012) | 내장 Playwright(`require('playwright')`)로 화면·입력을 직접 확인 |
+| 브라우저 확인 | ✅ (T-012) | 내장 Playwright로 페이지·입력을 직접 확인 |
 | 권한 | Auto가 최대 | Bypass 없음. `.claude/settings.json` 쓰기는 Auto 안전장치가 막음 → 사용자 결정(U-02) |
 | Agent Teams, `.claude/agents/*.md` | 미확인 | Agent Teams는 실험 기능이라 쓰지 않는다. 에이전트 정의 파일은 T-015 때 시험한다 |
 
@@ -61,9 +65,9 @@
 
 | 레인 | 담당 | 수정할 수 있는 파일 |
 |---|---|---|
-| **L0 총괄** | 총괄 세션만 | `CLAUDE.md`, `TODO.md`, `README.md`, `.claude/**`, `.github/**`, `.gitignore`, `docs/permissions.md`, 루트 설정 파일(`package.json`, `package-lock.json`, `tsconfig.json`, `vite.config.ts`) |
-| **L1 게임 로직** | 작업 세션 / 서브에이전트 | `src/core/**`, `tests/core/**` (DOM·브라우저 API 금지) |
-| **L2 화면·입력·에셋** | 작업 세션 / 서브에이전트 | `index.html`, `src/ui/**`, `public/**`, `tests/ui/**` |
+| **L0 총괄** | 총괄 세션만 | `CLAUDE.md`, `TODO.md`, `README.md`, `.claude/**`, `.github/**`, `.gitignore`, `docs/permissions.md` |
+| **L1 자비스 지시문** | 작업 세션 / 서브에이전트 | `jarvis/*.md` (`briefing.md`, `commands.md`, `improvements.md`) |
+| **L2 자비스 화면** | 작업 세션 / 서브에이전트 | `jarvis/dashboard/**` |
 | **L3 문서·조사** | 작업 세션 / 서브에이전트 | `docs/**` (`docs/permissions.md` 제외) |
 | **보고서** | 각 작업자 | `reports/<작업ID>.md` (자기 작업 ID 파일만) |
 
@@ -78,10 +82,11 @@
 ## 4. 작업 규칙 (모든 세션·에이전트 공통)
 
 ### 4.1 절대 금지
-1. **파일 삭제 금지**: `rm`, `git rm`, `git clean` 등. 이름 변경·이동도 총괄의 사전 승인이 필요하다.
+1. **파일 삭제 금지**: `rm`, `git rm`, `git clean` 등. 이름 변경·이동도 총괄의 사전 승인이 필요하다. 사용자가 명시적으로 승인한 삭제만 예외(결정 기록에 남긴다).
 2. **강제 푸시·히스토리 재작성 금지**: `git push --force`/`-f`, `--force-with-lease`, `git reset --hard` 후 푸시, `rebase` 후 푸시.
-3. **저장소 밖 작업 금지**: 다른 저장소, 사용자와 무관한 다른 세션에 지시하기, 외부 서비스에 게시하기.
-   같은 저장소라도 이 체계가 만들지 않은 브랜치·세션(`TODO.md` 세션 등록부의 "관리 밖")은 **읽기만** 한다.
+3. **관리 범위**: 사용자의 모든 Claude 세션을 **읽고 요약**할 수 있다(`list_sessions`, `get_session`, `list_events`).
+   하지만 이 저장소 밖의 세션·저장소에 **지시하거나 수정하는 일은 사용자가 허락한 것만** 한다(`TODO.md` "허락 목록"). 외부 서비스에 게시하지 않는다.
+   같은 저장소라도 이 체계가 만들지 않은 브랜치(세션 등록부의 "관리 밖")는 **읽기만** 한다.
 4. **`main` 직접 푸시·병합 금지**: `main` 병합은 사용자가 확인한 뒤 직접 한다.
 5. PR은 사용자가 요청할 때만 만든다.
 
@@ -113,7 +118,7 @@
 
 ### 4.4 의사결정
 - 사용자에게 묻지 않고 합리적으로 정하되, **무엇을 왜 골랐는지** `TODO.md` "결정 기록"에 남긴다.
-- 사용자만 정할 수 있는 것(게임 방향, `main` 병합, 권한 모드)은 "결정 필요"에 올린다.
+- 사용자만 정할 수 있는 것(목표·방향, `main` 병합, 권한, 다른 세션에 지시 허락)은 "결정 필요"에 올린다.
 
 ---
 
@@ -135,7 +140,7 @@
   너는 my-first-game의 서브에이전트야. 먼저 CLAUDE.md와 TODO.md를 읽어.
   작업: <작업ID> <제목> / 레인: <L?> / 수정 가능 파일: <경로>
   할 일: <구체적 내용>
-  완료 기준(명령): <예: npm test 통과, npm run build 성공>
+  완료 기준(명령): <예: 테스트 통과, 상황판에 데이터가 보임>
   상한: 도구 호출 약 <N>회, 검색 <N>번. 넘으면 멈추고 그때까지 결과를 보고해.
   규칙: 수정 가능 파일 밖은 읽기만, 파일 삭제 금지, 푸시 금지, TODO.md 수정 금지.
   30분 넘게 걸리면 중간 커밋(worktree일 때)과 보고서 초안을 먼저 남겨.
@@ -143,7 +148,7 @@
   ```
 - **worktree 주의 (T-004)**: worktree는 `main`에서 시작한다. 프롬프트에 다음을 넣는다.
   - "규칙 파일은 `/home/user/my-first-game/CLAUDE.md`, `/home/user/my-first-game/TODO.md`에서 읽어."
-  - "먼저 worktree 안에서 `git merge --ff-only claude/vibrant-archimedes-t0utvy`를 실행하고, 그다음 `npm ci`를 실행해." (T-013에서 검증됨. 실패하면 보고만)
+  - "먼저 worktree 안에서 `git merge --ff-only claude/vibrant-archimedes-t0utvy`를 실행해." (T-013에서 검증됨. 실패하면 보고만)
   - "git 명령은 하나씩 따로 실행하고(`&&`, heredoc 금지), 파일은 Write 도구로 써."
 - 끝난 worktree 폴더는 지우지 않는다(삭제 금지). `.gitignore`에 있고, 컨테이너가 회수되면 함께 사라진다.
 
@@ -162,22 +167,28 @@
 - **병합 전 체크리스트** (보고서만 믿고 병합하지 않는다. T-012에서 실제로 쓴 절차):
   1. `git fetch origin <작업 브랜치>` → `git diff --stat <통합 브랜치>...origin/<작업 브랜치>`로 **허용 범위 밖 파일이 없는지** 확인
   2. 코드를 읽고 검토한다. diff가 크면 검토 전용 서브에이전트(Sonnet, 읽기 전용)에게 리뷰를 맡길 수 있다.
-  3. `git merge --no-ff` 후 총괄이 **직접** `npm ci`, `npm test`, `npm run build` 실행
-  4. 화면이 바뀌었으면 `npx vite preview` + Playwright로 실제 동작 확인(예: 키 입력 → 이동 거리, 콘솔 오류 없음)
+  3. `git merge --no-ff` 후 총괄이 **직접** 완료 기준 명령(테스트·빌드 등)을 다시 실행
+  4. 화면(상황판 등)이 바뀌었으면 실제로 열어서 확인(Playwright 또는 Artifact 읽기)
   5. 보고서의 "남은 일 / 위험"을 Backlog에 옮긴다
   6. 푸시 후 GitHub Actions 결과 확인(MCP `actions_list`)
 - 같은 작업이 2번 실패하면 더 작게 쪼개서 다시 맡긴다.
 - 끝난 작업 세션은 그대로 두면 쉬는 상태로 남고 사용량을 쓰지 않는다. 보관(archive)은 사용자가 정리할 때 한다.
 
-### 5.5 정기 점검
-- 1회 점검: `send_later(delay_minutes=N, message=...)` → 지정한 시간에 총괄 세션에 메시지가 도착한다.
-- 반복 점검: `create_trigger`(최소 1시간 간격). 작업 세션이 오래 돌 때만 쓰고, 필요 없어지면 `update_trigger(enabled=false)`로 끈다.
+### 5.5 정기 브리핑 (자비스의 눈)
+- 서버 예약 작업(`create_trigger`, **실행마다 새 세션** + 푸시 알림)이 `jarvis/briefing.md`의 지시문으로 돈다. 새 세션이라 컨텍스트가 작아 싸다.
+- 브리핑은 **읽기만** 한다: 세션 목록·상태·요약, 예약 작업, 사용량 → 상황판 데이터 갱신 → 중요한 일만 알림.
+- 1회 점검은 `send_later`. 필요 없어진 예약은 `update_trigger(enabled=false)`로 끈다. 예약 ID는 `TODO.md` 세션 등록부에 적는다.
+
+### 5.6 사용자 명령 처리 (말로 일 맡기기)
+- 명령과 처리 방법은 `jarvis/commands.md`(명령 사전)에 모은다. 기본 흐름: **듣기 → 5.1 판단 → `TODO.md`에 계획 → 맡기기 → 5.4 검증 → 보고**.
+- "상태 알려줘" → 상황판 링크 + 3줄 요약. "정리해줘" → 정리 제안을 보여 주고 **승인받은 것만** 보관(archive)·예약 끄기.
+- 다른 프로젝트의 일을 시키면: 그 저장소로 새 작업 세션을 만든다(사용자가 시킨 일이므로 허락으로 본다). **이미 있는 다른 세션에 지시**하는 것은 `TODO.md` "허락 목록"에 있을 때만.
+- **자기 개선**: 명령 처리에서 막힌 점, 반복되는 요청, 새로 알게 된 기능은 `jarvis/improvements.md`에 적고, 사용자 승인 후 반영한다.
 
 ---
 
 ## 6. 사용자가 직접 하는 일
-1. **`main` 병합**: 통합 브랜치를 확인하고 PR을 만들어(또는 총괄에게 "PR 만들어줘"라고 요청) 병합한다.
-2. **권한 모드**: 프롬프트 옆 모드 메뉴에서 **Auto**를 고른다(클라우드에서 가장 넓은 모드. Bypass는 없다).
-   확인 질문을 더 줄이고 금지 명령을 막고 싶으면 `docs/permissions.md`의 `.claude/settings.json` 안을 직접 적용한다.
-3. **게임 방향 결정**: `docs/game-ideas.md`를 보고 `TODO.md`의 T-010에 답한다.
-4. **사용량 한도**: 한도가 초기화될 때까지 기다리거나 요금제를 확인한다.
+1. **`main` 병합**: 통합 브랜치를 확인하고 병합한다("PR 만들어줘"라고 하면 총괄이 PR을 만든다).
+2. **권한 모드**: 프롬프트 옆 모드 메뉴에서 **Auto**(클라우드에서 가장 넓은 모드). 더 줄이려면 `docs/permissions.md` 적용.
+3. **허락**: 다른 프로젝트의 기존 세션에 자비스가 지시해도 되는지, 정리(보관·삭제) 제안 승인.
+4. **알림**: Claude 앱 알림을 켜 두면 브리핑의 중요 알림을 휴대폰으로 받는다.
