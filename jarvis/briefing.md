@@ -35,7 +35,7 @@
    - `improvements`: 이전 데이터를 그대로 둔다(자비스 성장 작업이 따로 갱신).
    - `decisions`: 저장소가 붙어 있으면 `TODO.md`의 "결정 필요" 표에서 답이 "(대기"로 시작하는 행을 읽어 만들고, 없으면 이전 `board/decisions`를 읽어 그대로 다시 쓴다.
    - `headline`: "세션 N개: 진행 중 a, 검토 대기 b, 완료 c. 실패·막힘 d." 형식 한 줄.
-6. `ArtifactData list`로 version을 읽은 뒤 `batch`로 7개 문서를 갱신(위 구조 그대로, `summary.updatedAt` 포함).
+6. `ArtifactData list`로 version을 읽은 뒤 `batch`로 7개 문서를 갱신(위 구조 그대로). `summary.updatedAt`은 짐작하지 말고 `date -u +%Y-%m-%dT%H:%M:%SZ` 결과를 쓴다.
 7. 첫 줄이 `중요:`이면 `PushNotification` 도구(ToolSearch로 `select:PushNotification`)로 그 첫 줄을 200자 이내로 보낸다. 도구가 없거나 "보내지 않음"이 나와도 실패로 치지 않는다.
 8. 최종 답변(아래 형식).
 
