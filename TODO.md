@@ -46,7 +46,7 @@
 
 | ID | 작업 (계획) | 담당 | 브랜치 | 시작 | 상태 / 다음 단계 |
 |---|---|---|---|---|---|
-| J-001 | **목표**: ① 상황판 Artifact(모바일 우선, 한국어, DB 포함: 요약·세션·예약 작업·결정 대기·정리 제안·개선 제안) ② 브리핑 지시문 `jarvis/briefing.md`(예약 세션이 저장소 없이 혼자 읽고 실행할 수 있게) ③ 지시문대로 브리핑 1번 직접 실행해 상황판 채우기. **파일**: `jarvis/dashboard/**`, `jarvis/briefing.md`, `reports/J-001.md`. **완료 기준**: 상황판 링크를 열면 실제 세션 목록이 보임 + 지시문 단계가 모두 실행됨. **상한**: 도구 호출 약 60회, 웹 검색 없음. **위험**: 다른 세션에는 읽기만(지시·보관 금지) | 작업 세션 (Sonnet) | `claude/L2-J-001` | 11-10 | 시작 |
+| J-001 | **목표**: ① 상황판 Artifact(모바일 우선, 한국어, DB 포함: 요약·세션·예약 작업·결정 대기·정리 제안·개선 제안) ② 브리핑 지시문 `jarvis/briefing.md`(예약 세션이 저장소 없이 혼자 읽고 실행할 수 있게) ③ 지시문대로 브리핑 1번 직접 실행해 상황판 채우기. **파일**: `jarvis/dashboard/**`, `jarvis/briefing.md`, `reports/J-001.md`. **완료 기준**: 상황판 링크를 열면 실제 세션 목록이 보임 + 지시문 단계가 모두 실행됨. **상한**: 도구 호출 약 60회, 웹 검색 없음. **위험**: 다른 세션에는 읽기만(지시·보관 금지) | 작업 세션 `session_01BfrX52x2XYeTVLFYMoKjXF` (Sonnet) | `claude/L2-J-001` | 11-10 12:13 | 실행 중. 끝나면 `send_message`로 보고. 대비 점검 예약 있음 |
 
 ---
 
@@ -104,6 +104,7 @@
 | 종류 | ID | 작업 | 브랜치 | 상태 | 비고 |
 |---|---|---|---|---|---|
 | 총괄 세션 | `session_01BfrX53CHWvJYbgaip4CsNq` | 총괄 | `claude/vibrant-archimedes-t0utvy` | 실행 중 | 컨텍스트 큼 → J-006 교대 예정 |
+| 작업 세션 | `session_01BfrX52x2XYeTVLFYMoKjXF` | J-001 | `claude/L2-J-001` | 실행 중 | 11-10 12:13 시작 |
 | 작업 세션 | `session_01BfrX54BgLQ8Mg9jKF8Y3Mi` | T-005 | `claude/test-T-005` | 완료, 쉬는 중 | 정리 후보 |
 | 작업 세션 | `session_01BfrX51r3adh4mipYSByyxB` | T-012 | `claude/L1-T-012` | 완료, 쉬는 중 | 정리 후보 |
 | 서버 예약 | `trig_01DoxRvLPaXRPz3bE1KAGcUN`, `trig_01ECTy4PJR2wkrRCiX6GCTZE` | T-006, T-012 점검 | - | 꺼짐 | 정리 후보 |
