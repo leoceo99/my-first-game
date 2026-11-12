@@ -12,5 +12,9 @@
 | [docs/04_로드맵.md](docs/04_로드맵.md) | 단계별 개발 계획 |
 | [docs/05_팀과_자비스.md](docs/05_팀과_자비스.md) | 개발팀 구성, 자비스 운영 방식 |
 | [docs/06_현지화_원칙.md](docs/06_현지화_원칙.md) | 다국어 번역 원칙 |
+| [docs/07_팀_운영_상세.md](docs/07_팀_운영_상세.md) | 팀 13명의 역할·성향, 정보 공유와 작업 흐름 |
+| [docs/08_AI대화_설계안.md](docs/08_AI대화_설계안.md) | 주관식 대화와 살아 있는 NPC 설계, 비용 |
+| [docs/lore/](docs/lore/) | 세계관 설정집 (진실 B 상세안 등) |
+| [docs/decisions/](docs/decisions/) | 결정 기록 |
 | [jarvis/](jarvis/) | 할 일 목록, 작업 보고서, 회고 기록 |
 | [archive/steel-ground/](archive/steel-ground/) | 첫 실험작 「강철의 대지」 보관 |

@@ -25,8 +25,11 @@
 - 에셋은 CC0 또는 상업 이용 가능 라이선스만, `assets/LICENSES.md`에 출처를 기록한다.
 - 버그를 고치면 같은 버그를 막는 테스트를 추가한다.
 
-## 팀 (`.claude/agents/`)
-story-writer(스토리 작가) · game-designer(게임 디자이너) · programmer(프로그래머) · art-sound-director(아트·사운드) · qa-tester(QA) · localizer(현지화)
+## 팀 (`.claude/agents/`, 상세: `docs/07_팀_운영_상세.md`)
+- 스토리팀: story-writer(메인 작가) · plot-architect(플롯 설계자) · dialogue-writer(인물·대사 작가) · lore-keeper(설정 관리자) · story-critic(비평가)
+- 디자인팀: game-designer(시스템) · experience-designer(경험) · player-advocate(플레이어 대변인)
+- 개발·아트·현지화: programmer · qa-tester · art-sound-director · localizer
+- 작업마다 담당자와 **검토자**를 함께 정한다. 끝나면 `jarvis/handoff/작업ID.md`에 인수인계 노트를 쓴다.
 - 사용량 절약: 작은 일은 자비스가 직접 하고, 큰 일만 전문 에이전트에게 맡긴다.
 - 에이전트에게 일을 맡길 때는 관련 문서 경로와 완료 기준을 함께 준다.
 
