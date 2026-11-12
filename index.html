@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="강철의 대지">
+  <meta name="theme-color" content="#14160f">
+  <meta name="description" content="강철의 대지 — 아이패드용 실시간 전술 전쟁 게임">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="icon" href="icons/icon-192.png">
+  <title>강철의 대지</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="hud" class="hidden">
+    <div id="topbar" class="panel">
+      <div class="team blue">
+        <span class="tlabel">아군</span>
+        <div class="bar"><i id="tk0"></i></div>
+        <b id="tk0n">500</b>
+      </div>
+      <div id="flags"></div>
+      <div class="team red">
+        <b id="tk1n">500</b>
+        <div class="bar"><i id="tk1"></i></div>
+        <span class="tlabel">적군</span>
+      </div>
+    </div>
+
+    <div id="resbar" class="panel">
+      <div class="res"><span>보급</span><b id="supply">0</b><small id="income">+0/s</small></div>
+      <div class="res"><span>병력</span><b id="pop">0</b><small>/ 40</small></div>
+      <div class="res"><span>작전 시간</span><b id="clock">00:00</b></div>
+      <button id="btnMute" class="icon" aria-label="소리">♪</button>
+      <button id="btnPause" class="icon" aria-label="일시정지">❚❚</button>
+    </div>
+
+    <div id="minimapWrap" class="panel"><canvas id="minimap"></canvas></div>
+
+    <div id="selPanel" class="panel">
+      <div id="selInfo">선택된 부대 없음 · 아군을 탭하세요</div>
+      <div class="row">
+        <button id="btnAll">전체 선택</button>
+        <button id="btnClear">해제</button>
+        <button id="btnStop">정지</button>
+        <button id="btnEngage" class="toggle on" title="이동 중 적을 만나면 멈춰서 교전">교전 이동</button>
+      </div>
+    </div>
+
+    <div id="deploy" class="panel">
+      <div class="ptitle">증원 요청 <small>본부에서 출격</small></div>
+      <div id="deployGrid"></div>
+    </div>
+
+    <div id="toasts"></div>
+    <div id="modeHint" class="hidden"><span>포격 지점을 탭하세요</span><button id="btnCancelMode">취소</button></div>
+  </div>
+
+  <div id="menu" class="overlay">
+    <div class="card">
+      <div class="logo">
+        <div class="kicker">실시간 전술 전쟁</div>
+        <h1>강철의 대지</h1>
+        <div class="sub">STEEL GROUND</div>
+      </div>
+      <p class="brief">강을 사이에 둔 전선. 다섯 개의 전략 거점을 장악하고 적의 전투력(티켓)을 0으로 만들면 승리합니다.</p>
+      <div class="label">난이도</div>
+      <div class="seg" id="diffSeg">
+        <button data-d="easy">신병</button>
+        <button data-d="normal" class="on">정규군</button>
+        <button data-d="hard">베테랑</button>
+      </div>
+      <button id="btnStart" class="primary">작전 개시</button>
+      <button id="btnHow" class="ghost">조작 방법</button>
+    </div>
+  </div>
+
+  <div id="howto" class="overlay hidden">
+    <div class="card wide">
+      <h2>조작 방법</h2>
+      <div class="cols">
+        <div>
+          <h3>터치 (아이패드)</h3>
+          <ul>
+            <li><b>아군 탭</b> — 분대 선택 (두 번 탭: 화면 안 같은 병과 전체)</li>
+            <li><b>꾹 누른 뒤 드래그</b> — 범위 선택</li>
+            <li><b>땅 탭</b> — 선택 부대 이동</li>
+            <li><b>적 탭</b> — 집중 공격</li>
+            <li><b>한 손가락 드래그</b> — 지도 이동</li>
+            <li><b>두 손가락 핀치</b> — 확대 / 축소</li>
+            <li><b>미니맵 탭</b> — 그 위치로 이동</li>
+          </ul>
+        </div>
+        <div>
+          <h3>전술 팁</h3>
+          <ul>
+            <li>숲·모래주머니·건물 옆은 <b>엄폐</b> — 총격 피해 감소</li>
+            <li>숲 속 보병은 가까이 오기 전까지 <b>보이지 않음</b></li>
+            <li>기관총은 <b>거치</b> 후 사격, 적을 <b>제압</b>(▼)해 느리고 부정확하게 만듦</li>
+            <li>전차는 <b>후면 장갑</b>이 약함 — 측후면을 노리세요</li>
+            <li>박격포는 건물 너머도 공격 가능 (최소 사거리 있음)</li>
+            <li>거점을 더 많이 가진 쪽이 상대 티켓을 깎습니다</li>
+          </ul>
+        </div>
+      </div>
+      <p class="keys">키보드/마우스: 좌클릭 선택 · 드래그 범위선택 · 우클릭 이동/공격 · WASD 화면이동 · 휠 확대 · 1~5 증원 · B 포격 · Space 일시정지</p>
+      <button id="btnHowClose" class="primary">확인</button>
+    </div>
+  </div>
+
+  <div id="pauseMenu" class="overlay hidden">
+    <div class="card">
+      <h2>일시정지</h2>
+      <button id="btnResume" class="primary">계속하기</button>
+      <button id="btnRestart">다시 시작</button>
+      <button id="btnHow2" class="ghost">조작 방법</button>
+      <button id="btnQuit" class="ghost">메인 메뉴</button>
+    </div>
+  </div>
+
+  <div id="endMenu" class="overlay hidden">
+    <div class="card">
+      <div class="kicker" id="endKicker">작전 종료</div>
+      <h1 id="endTitle">승리</h1>
+      <div id="endStats" class="stats"></div>
+      <button id="btnAgain" class="primary">다시 하기</button>
+      <button id="btnMenu" class="ghost">메인 메뉴</button>
+    </div>
+  </div>
+
+  <div id="rotate" class="overlay"><div class="card"><div class="rot">⟲</div>기기를 <b>가로 방향</b>으로 돌려주세요</div></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

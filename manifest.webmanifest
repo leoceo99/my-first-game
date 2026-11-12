@@ -1,0 +1,16 @@
+{
+  "name": "강철의 대지 — STEEL GROUND",
+  "short_name": "강철의 대지",
+  "description": "아이패드용 실시간 전술 전쟁 게임",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#14160f",
+  "theme_color": "#14160f",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
