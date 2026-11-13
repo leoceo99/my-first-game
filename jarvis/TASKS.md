@@ -24,7 +24,7 @@
 
 | ID | 상태 | 우선 | 작업 | 담당 |
 |---|---|---|---|---|
-| T-101 | [진행] | P0 | 진실 B 상세 설계 (docs/lore/진실_되풀이되는세계_v0.2.md 질문 6개) | 디렉터+story-writer+plot-architect+story-critic |
+| T-101 | [진행] | P0 | 진실 v0.4: 비평 구멍 A~I 해결 (v0.3 반려 5.3점, jarvis/meetings/2026-11-13_진실v0.3_비평.md) | 디렉터+story-writer+plot-architect+story-critic |
 | T-102 | [진행] | P0 | 마법·연금술·주술 체계 공동 설계 (docs/lore/힘의체계_초안.md) | 디렉터+story+design |
 | T-106 | [진행] | P0 | 악마 6단계 위계 (docs/lore/악마_위계_초안.md) | 디렉터+story-writer+lore-keeper |
 | T-107 | [대기] | P1 | 서양 검술 유파 상세 설계 + 롱소드 기본 베기 3종 동작 시험 (docs/09) | game-designer, art-sound-director, programmer |
