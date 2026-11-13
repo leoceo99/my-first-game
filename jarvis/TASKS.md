@@ -24,11 +24,11 @@
 
 | ID | 상태 | 우선 | 작업 | 담당 |
 |---|---|---|---|---|
-| T-101 | [진행] | P0 | 진실 v0.4: 비평 구멍 A~I 해결 (v0.3 반려 5.3점, jarvis/meetings/2026-11-13_진실v0.3_비평.md) | 디렉터+story-writer+plot-architect+story-critic |
+| T-101 | [진행] | P0 | 진실 v0.4 작성 완료 → 디렉터 결정 G-01~G-05 대기 → 비평가 재검토 (docs/lore/진실_되풀이되는세계_v0.4.md) | 디렉터+story-writer+plot-architect+story-critic |
 | T-102 | [진행] | P0 | 마법·연금술·주술 체계 공동 설계 (docs/lore/힘의체계_초안.md) | 디렉터+story+design |
 | T-106 | [진행] | P0 | 악마 6단계 위계 (docs/lore/악마_위계_초안.md) | 디렉터+story-writer+lore-keeper |
-| T-107 | [대기] | P1 | 서양 검술 유파 상세 설계 + 롱소드 기본 베기 3종 동작 시험 (docs/09) | game-designer, art-sound-director, programmer |
+| T-107 | [승인됨] | P1 | 롱소드 기본 베기 3종 동작을 직접 키프레임으로 제작·시험 (docs/09 5-2절). T-004 프로토타입 위에서 | game-designer, art-sound-director, programmer |
 | T-108 | [대기] | P1 | 공통 의도 사전 60개 초안 + 기기 안 매칭 모델 정확도 시험 (docs/08 v0.2) | dialogue-writer, programmer, qa-tester |
-| T-103 | [대기] | P1 | 제국·왕국 설정, 지도 초안 | story |
+| T-103 | [진행] | P1 | 제국·왕국 설정: 귀족 체계(docs/lore/귀족체계_초안.md), 152가문 검술 데이터(docs/lore/data/) | story-writer |
 | T-104 | [대기] | P1 | 오리진 최대 100개 목록, 오리진별 줄거리 개요·엔딩 목록 | plot-architect+story-writer |
 | T-105 | [대기] | P1 | 게임 제목·시리즈 이름 후보 | story |
