@@ -15,6 +15,12 @@
       #btns { top: calc(10px + env(safe-area-inset-top, 0px)); right: calc(10px + env(safe-area-inset-right, 0px)); display: flex; gap: 6px; padding: 6px; }
       #btns button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--edge); border-radius: 4px; padding: 6px 10px; cursor: pointer; }
       #btns button:hover, #btns button:focus-visible { border-color: var(--accent); outline: none; }
+      #acts { position: fixed; right: calc(14px + env(safe-area-inset-right, 0px)); bottom: calc(80px + env(safe-area-inset-bottom, 0px));
+        display: grid; grid-template-columns: repeat(3, 64px); gap: 8px; }
+      #acts button { font: inherit; font-size: 13px; color: var(--ink); background: var(--panel); border: 1px solid var(--edge);
+        border-radius: 50%; width: 64px; height: 64px; touch-action: manipulation; user-select: none; -webkit-user-select: none; cursor: pointer; }
+      #acts button:active { border-color: var(--accent); background: rgba(201, 119, 63, 0.35); }
+      #acts .big { grid-column: 2 / span 2; width: auto; border-radius: 32px; }
       #helpbox { bottom: calc(10px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%); max-width: calc(100% - 40px); text-align: center; pointer-events: none; opacity: .9; }
       #toast { top: 30%; left: 50%; transform: translateX(-50%); border-color: var(--accent); }
       [hidden] { display: none !important; }
@@ -23,7 +29,8 @@
   <body>
     <div id="app"></div>
     <div id="hud" class="panel"><div id="title"></div><div id="camera"></div><div id="fps">-</div></div>
-    <div id="btns" class="panel"><button id="btn-camera"></button><button id="btn-save"></button><button id="btn-load"></button></div>
+    <div id="btns" class="panel"><button id="btn-camera"></button><button id="btn-save"></button><button id="btn-load"></button><button id="btn-sound"></button></div>
+    <div id="acts"><button id="btn-cut1"></button><button id="btn-cut2"></button><button id="btn-cut3"></button><button id="btn-sword"></button><button id="btn-jump" class="big"></button></div>
     <div id="helpbox" class="panel"><div id="help"></div><div id="help-touch"></div></div>
     <div id="toast" class="panel" hidden></div>
     <script type="module" src="/src/main.ts"></script>

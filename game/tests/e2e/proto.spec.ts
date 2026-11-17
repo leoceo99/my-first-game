@@ -60,6 +60,62 @@ test('마을이 그려지고, 걷고, 시점을 바꾸고, 저장·불러오기�
   expect(errors).toEqual([]);
 });
 
+test('점프, 바닥별 발소리 횟수', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => ((window as any).__game?.frames ?? 0) > 10);
+  // 흙길을 걸으면 흙 발소리가 늘어난다
+  await page.keyboard.down('KeyW'); await page.waitForTimeout(1500); await page.keyboard.up('KeyW');
+  let s = await state(page);
+  expect(s.steps.dirt).toBeGreaterThanOrEqual(2);
+  expect(s.steps.grass).toBe(0);
+  // 풀밭으로 옮겨 걷기
+  await page.evaluate(() => (window as any).__dev.setPlayer(10, 30, 0));
+  await page.keyboard.down('KeyW'); await page.waitForTimeout(1500); await page.keyboard.up('KeyW');
+  s = await state(page);
+  expect(s.steps.grass).toBeGreaterThanOrEqual(2);
+  // 광장 돌바닥 (우물 남쪽)
+  await page.evaluate(() => (window as any).__dev.setPlayer(-3, 9.5, Math.PI));
+  await page.keyboard.down('KeyW'); await page.waitForTimeout(1200); await page.keyboard.up('KeyW');
+  expect((await state(page)).steps.stone).toBeGreaterThanOrEqual(1);
+  // 점프
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(250);
+  s = await state(page);
+  expect(s.player.y).toBeGreaterThan(0.3);
+  expect(s.player.onGround).toBe(false);
+  await page.waitForTimeout(800);
+  expect((await state(page)).player.onGround).toBe(true);
+});
+
+test('롱소드 베기 3종이 허수아비를 맞힌다', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto('/');
+  await page.waitForFunction(() => ((window as any).__game?.frames ?? 0) > 10);
+  // 허수아비(3.5, -1.5) 앞 1.3m에서 마주 본다
+  await page.evaluate(() => (window as any).__dev.setPlayer(3.5, -0.2, 0));
+  const shots: string[] = [];
+  for (const [key, id] of [['Digit1', 'oberhau'], ['Digit2', 'mittelhau'], ['Digit3', 'unterhau']]) {
+    const before = (await state(page)).hits;
+    await page.keyboard.press(key);
+    await page.waitForTimeout(250);
+    const mid = await state(page);
+    expect(mid.attack).toBe(id);
+    expect(mid.swordDrawn).toBe(true);
+    await page.screenshot({ path: `test-results/cut-${id}.png` });
+    shots.push(id);
+    await page.waitForTimeout(900);
+    expect((await state(page)).hits).toBe(before + 1);
+  }
+  // 멀리서 휘두르면 맞지 않는다
+  await page.evaluate(() => (window as any).__dev.setPlayer(3.5, 3, 0));
+  const h = (await state(page)).hits;
+  await page.keyboard.press('Digit2');
+  await page.waitForTimeout(1100);
+  expect((await state(page)).hits).toBe(h);
+  expect(errors).toEqual([]);
+});
+
 test('집을 뚫고 들어가지 못한다', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => ((window as any).__game?.frames ?? 0) > 10);
