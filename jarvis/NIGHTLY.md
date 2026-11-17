@@ -7,7 +7,7 @@
 ## 시작 전 점검 — 낮은 총괄, 밤은 이 세션 (디렉터 지시 11-17)
 > "내가 할 때는 총괄 세션에서 하고, 야간 작업은 내가 못할 때 사용량 한도가 풀리면 진행해."
 1. **디렉터가 지금 총괄 세션에서 일하는 중이면 하지 않는다.** `get_session(session_id="session_01BfrX51dXWaNKuWw2fGatYw")`의 `status_bucket`이 working이거나 `updated_at`이 30분 이내면 → 0단계(눈)만 하고 1~2단계는 건너뛴다. 운영 일지에 "디렉터 작업 중이라 손은 쉼"을 적는다.
-2. **사용량 한도를 먼저 본다.** `get_session()`(인자 없이)의 `external_metadata.rate_limit_info`:
+2. **사용량 한도를 먼저 본다.** `get_session()`(인자 없이 = 이 세션)의 `external_metadata.rate_limit_info.status`. 필드가 없으면 `allowed`로 보되, 실행 중 429가 나오면 아래처럼 멈춘다:
    - `allowed` → 진행.
    - `allowed_warning` → 0단계만 하고 손은 쉼(한도를 디렉터 낮 작업에 남긴다).
    - `rejected` 또는 실행 중 한도 오류(429) → 즉시 멈춤. `resetsAt`(초기화 시각)이 디렉터가 보통 쉬는 시간(한국 시간 00:00~08:00)에 들면 `send_later`로 그 시각 10분 뒤 이 세션에 "[야간 재시도] jarvis/NIGHTLY.md 처음부터" 메시지를 한 번 예약한다. 재시도는 하루 1번까지.
@@ -15,7 +15,7 @@
 
 ## 0단계 — 눈 (정기 브리핑, 읽기만, 도구 호출 약 20회 이하)
 1. 저장소 기준 브랜치 `claude/friendly-wozniak-1bd340`을 가져온다.
-2. `jarvis/briefing.md`의 "순서" 1~6을 그대로 실행해 상황판(`https://claude.ai/artifact/5ZCwN5t4XzQWUwJk48PEjz`) 데이터를 갱신한다. 단, 브리핑의 "파일을 고치지 않는다" 규칙은 이 통합 운영에서는 **운영 일지 기록만 예외**로 한다.
+2. `jarvis/briefing.md`의 "순서" 1~6을 그대로 실행해 (상황판 쓰기가 권한 거부되면 다시 시도하지 말고 운영 일지에 "상황판 쓰기 거부"로 적어 총괄에게 넘긴다) 상황판(`https://claude.ai/artifact/5ZCwN5t4XzQWUwJk48PEjz`) 데이터를 갱신한다. 단, 브리핑의 "파일을 고치지 않는다" 규칙은 이 통합 운영에서는 **운영 일지 기록만 예외**로 한다.
 3. `jarvis/shared/운영일지.md` 맨 위에 오늘 날짜 칸을 만들고 "눈" 3줄(세션 상태, 실패·막힘, 결정 대기 수)을 적는다.
 4. 다른 세션에 지시하거나 보관·삭제·예약 변경을 하지 않는다(제안만).
 
