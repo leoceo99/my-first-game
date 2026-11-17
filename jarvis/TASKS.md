@@ -32,3 +32,10 @@
 | T-103 | [진행] | P1 | 제국·왕국 설정: 귀족 체계(docs/lore/귀족체계_초안.md), 152가문 검술 데이터(docs/lore/data/) | story-writer |
 | T-104 | [대기] | P1 | 오리진 최대 100개 목록, 오리진별 줄거리 개요·엔딩 목록 | plot-architect+story-writer |
 | T-105 | [대기] | P1 | 게임 제목·시리즈 이름 후보 | story |
+| T-110 | [완료] | P0 | 엔딩도감 v1.1 (v3.1 반영, 공통 결말 C-01~C-09) | plot-architect |
+| T-111 | [진행] | P0 | 출신 20개 의심 설계 v1 → 비평 7.2 → v1.1 수정 중 (docs/lore/출신20_의심설계_v1.md) | plot-architect, story-critic |
+| T-112 | [진행] | P0 | **인물 장부 1차**: 인물 카드 양식 + 공통 핵심 인물(황제·열쇠의 기둥·대악마·7마왕 등) 카드 (docs/lore/인물/) | dialogue-writer, story-critic |
+| T-113 | [진행] | P0 | 옛 신 10명 설정(이름·성격·봉인 장소·시련) + 복선 장부·설정 장부 정리 | lore-keeper, story-writer |
+| T-114 | [대기] | P1 | 출신 20개 인물 카드(동료·가족·숨는 자리 후보) — T-112 양식 확정 후 | dialogue-writer |
+| T-115 | [대기] | P1 | 캐릭터 외형 설계: 셀 셰이딩 캐릭터 스타일 가이드, 출신별 복장·체형, 3D 모델 제작 방식(CC0 기반 + 자체 수정) 조사 | art-sound-director, programmer |
+| T-116 | [대기] | P1 | 캐릭터 생성 시스템 설계: 신분·나이·성별·재산·직업·재능 1·특성 4 → 외형·능력·대사 반영 | game-designer, experience-designer |
