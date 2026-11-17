@@ -126,12 +126,12 @@
 |---|---|---|---|---|---|
 | **총괄 세션** | `session_01BfrX51dXWaNKuWw2fGatYw` | 총괄 (v1+v2 통합) | `claude/friendly-wozniak-1bd340` (통합 브랜치) | 실행 중 | 11-13부터 |
 | 이전 총괄 세션 | `session_01BfrX53CHWvJYbgaip4CsNq` | v1 총괄 | `claude/vibrant-archimedes-t0utvy` | 은퇴 | J-006 교대 완료로 간주 |
-| **야간 전용 세션** | `session_01BfrX53b4yqTFnb7FLjmAvw` "자비스 야간 작업 (전용 세션)" | 게임 작업 | 자기 브랜치 | 운영 중 | 저장소 연결됨 |
+| **통합 운영 세션 (눈+밤의 손)** | `session_01BfrX53b4yqTFnb7FLjmAvw` "자비스 야간 작업 (전용 세션)" | 브리핑 + 게임 작업 + 스토리 방 | 자기 브랜치 `claude/nightly-*` | 운영 중 | 11-17 통합. 지침 `jarvis/NIGHTLY.md`, 공유 `jarvis/shared/운영일지.md` |
 | **서버 예약(반복)** | `trig_016A7rC6feP7YTttgiYmTaR8` "자비스 야간 작업 (전용 세션)" | 게임 작업 | - | **켜짐**, 매일 02:52 한국 시간 | 위 세션을 깨움. `jarvis/NIGHTLY.md` |
 | 서버 예약(반복) | `trig_016GVkacfkdAw2XBFm97asRb` "자비스 야간 작업" | 1차 방식 | - | 꺼짐 | 새 세션에 저장소가 없어 푸시 실패(11-13). 정리 후보 |
 | 작업 세션 | `session_01BfrX52x2XYeTVLFYMoKjXF` | J-001 | `claude/L2-J-001` | 완료, 쉬는 중 | 병합 완료. 정리 후보 |
-| **브리핑 전용 세션** | `session_01BfrX51PuxE77gz1N787Ykw` "[자비스] 정기 브리핑 (눈)" | J-002 | `claude/jarvis-briefing`(푸시 안 함) | 운영 중 (Sonnet) | 대화가 쌓이면 비싸지므로 주기적으로 새 세션으로 교대(J-009) |
-| **서버 예약(반복)** | `trig_01SDsYw2dPkaCo3ZBcYGCcra` "자비스 정기 브리핑 (전용 세션)" | J-002 | - | **켜짐**, 8시간마다(`18 */8 * * *` UTC) | 위 세션을 깨움. 지시문은 저장소의 `jarvis/briefing.md`를 `git pull`로 받아 씀 |
+| 브리핑 전용 세션 (쉬는 중, 11-17 통합으로 은퇴 예정) | `session_01BfrX51PuxE77gz1N787Ykw` "[자비스] 정기 브리핑 (눈)" | J-002 | `claude/jarvis-briefing`(푸시 안 함) | 운영 중 (Sonnet) | 대화가 쌓이면 비싸지므로 주기적으로 새 세션으로 교대(J-009) |
+| 서버 예약(반복) | `trig_01SDsYw2dPkaCo3ZBcYGCcra` "자비스 정기 브리핑 (전용 세션)" | J-002 | - | **꺼짐 (11-17)** | 눈+밤의 손 통합으로 끔. 첫 통합 실행(11-17 17:52 UTC) 확인 후 정리 |
 | 서버 예약(반복) | `trig_01NPVoWpNSjo35ZgcWdjDQXK` "자비스 정기 브리핑" | J-002 1차 | - | 꺼짐 | 새 세션에 세션 조회 도구가 없어 실패. 정리 후보 |
 | 서버 예약(1회) | `trig_01G3CAzCtN73PVFRwqX5JViL` | J-001 대비 점검 | - | 12:59 UTC 실행 예정 | J-001이 끝나서 필요 없음 → 끔 |
 | 상황판 | https://claude.ai/artifact/5ZCwN5t4XzQWUwJk48PEjz | J-001 | - | 운영 중 | 소유자만 볼 수 있음 |
