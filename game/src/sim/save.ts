@@ -1,12 +1,15 @@
 // 저장 데이터 형식. 버전이 바뀌어도 옛 저장을 불러올 수 있게 변환기를 둔다 (docs/03 3장 5).
-import { clampPitch, type PlayerState } from './player';
+import { clampPitch } from './player';
+
+/** 저장하는 플레이어 정보: 위치와 방향만 (점프 중 속도 등은 저장하지 않는다) */
+export interface SavedPlayer { x: number; z: number; yaw: number; pitch: number }
 
 export const SAVE_VERSION = 2;
 
 export interface SaveData {
   version: number;
   savedAt: string; // ISO 시각
-  player: PlayerState;
+  player: SavedPlayer;
   camera: 'first' | 'third';
 }
 
