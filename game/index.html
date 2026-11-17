@@ -2,19 +2,30 @@
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>개발 골격 점검</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>마을 걷기 시험</title>
     <style>
-      html, body { margin: 0; height: 100%; background: #0d0c0f; color: #e8e2d6; overflow: hidden;
+      :root { --ink: #efe7d8; --panel: rgba(18, 14, 12, 0.66); --edge: rgba(239, 231, 216, 0.25); --accent: #c9773f; color-scheme: dark; }
+      html, body { margin: 0; height: 100%; background: #1a1714; color: var(--ink); overflow: hidden;
         font-family: system-ui, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
-      #app { position: fixed; inset: 0; }
-      #hud { position: fixed; top: 12px; left: 12px; padding: 8px 12px; background: rgba(0,0,0,.55);
-        border-radius: 6px; font-size: 14px; line-height: 1.5; pointer-events: none; }
+      #app { position: fixed; inset: 0; touch-action: none; }
+      .panel { position: fixed; background: var(--panel); border: 1px solid var(--edge); border-radius: 6px; padding: 8px 12px; font-size: 13px; line-height: 1.55; }
+      #hud { top: calc(10px + env(safe-area-inset-top, 0px)); left: calc(10px + env(safe-area-inset-left, 0px)); pointer-events: none; font-variant-numeric: tabular-nums; }
+      #title { font-weight: 600; }
+      #btns { top: calc(10px + env(safe-area-inset-top, 0px)); right: calc(10px + env(safe-area-inset-right, 0px)); display: flex; gap: 6px; padding: 6px; }
+      #btns button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--edge); border-radius: 4px; padding: 6px 10px; cursor: pointer; }
+      #btns button:hover, #btns button:focus-visible { border-color: var(--accent); outline: none; }
+      #helpbox { bottom: calc(10px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%); max-width: calc(100% - 40px); text-align: center; pointer-events: none; opacity: .9; }
+      #toast { top: 30%; left: 50%; transform: translateX(-50%); border-color: var(--accent); }
+      [hidden] { display: none !important; }
     </style>
   </head>
   <body>
     <div id="app"></div>
-    <div id="hud"><div id="title"></div><div id="fps">fps: -</div></div>
+    <div id="hud" class="panel"><div id="title"></div><div id="camera"></div><div id="fps">-</div></div>
+    <div id="btns" class="panel"><button id="btn-camera"></button><button id="btn-save"></button><button id="btn-load"></button></div>
+    <div id="helpbox" class="panel"><div id="help"></div><div id="help-touch"></div></div>
+    <div id="toast" class="panel" hidden></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
