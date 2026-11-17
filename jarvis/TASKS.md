@@ -11,9 +11,9 @@
 | T-001 | [완료] | P0 | 비전·레퍼런스·기획서·세계관 틀·기술설계·로드맵 초안 | 자비스 | docs/00~06 작성 |
 | T-002 | [완료] | P0 | 팀 구성(에이전트 6종), 자비스 운영 체계 | 자비스 | .claude/agents, jarvis/ |
 | T-003 | [완료] | P0 | 디렉터 검토: 기획 방향과 미정 사항(❓) 답변 | 디렉터 | 답변 반영 (2026-11-12) |
-| T-004 | [진행] | P0 | 기술 검증 프로토타입: 3D 캐릭터 이동, 1·3인칭 전환, 셀 셰이딩 장면, 저장/불러오기 — 11-17 구현·자동 테스트 통과. **남은 것: 디렉터 노트북에서 fps 확인** (handoff/T-004.md) | programmer, art | 플레이 링크 공유, fps 측정 |
+| T-004 | [완료] | P0 | 기술 검증 프로토타입: 3D 캐릭터 이동, 1·3인칭 전환, 셀 셰이딩 장면, 저장/불러오기 — 아이패드 60fps 확인(디렉터 11-17). 노트북은 미측정 (handoff/T-004.md) | programmer, art | 플레이 링크 공유, fps 측정 |
 | T-005 | [완료] | P0 | 개발 기반: Vite+TS 골격, Vitest/Playwright 자동 테스트, 아티팩트 배포 스크립트 | programmer, qa | 명령 한 번으로 테스트·배포 (11-17 야간: `game/`, 보고서 jarvis/reports/2026-11-17.md) |
-| T-006 | [대기] | P1 | 대화·분기 데이터 형식 설계: 분기 + 인물 카드 + 선택지 문장 + AI 주관식 연결 (docs/08) | programmer, plot-architect, dialogue-writer | 결정 기록(ADR) |
+| T-006 | [대기] | P1 | 대화·분기 데이터 형식 설계: 분기 + 인물 카드 + 선택지 문장 + AI 주관식 연결 (docs/08) — 11-18 야간: 조사·설계 초안 `docs/12_대화분기_데이터형식_초안.md`(결정 4건 대기) | programmer, plot-architect, dialogue-writer | 결정 기록(ADR) |
 | T-009 | [완료] | P0 | 팀 13명 구성 상세, 정보 공유 방식 (docs/07) | 자비스 | 에이전트 12종 |
 | T-010 | [대기] | P1 | AI 주관식 대화 비용·서버 결정 (디렉터) → 2단계에서 NPC 1~2명 시험 | 디렉터, programmer | 측정 보고 |
 | T-011 | [대기] | P1 | 엔딩 조립 시스템 설계 (출신 100개, 엔딩 수천 개) | plot-architect, game-designer | 설계 문서 |
@@ -27,7 +27,7 @@
 | T-101 | [진행] | P0 | 진실 v0.4 작성 완료 → 디렉터 결정 G-01~G-05 대기 → 비평가 재검토 (docs/lore/진실_되풀이되는세계_v0.4.md) | 디렉터+story-writer+plot-architect+story-critic |
 | T-102 | [진행] | P0 | 마법·연금술·주술 체계 공동 설계 (docs/lore/힘의체계_초안.md) | 디렉터+story+design |
 | T-106 | [진행] | P0 | 악마 6단계 위계 (docs/lore/악마_위계_초안.md) | 디렉터+story-writer+lore-keeper |
-| T-107 | [승인됨] | P1 | 롱소드 기본 베기 3종 동작을 직접 키프레임으로 제작·시험 (docs/09 5-2절). T-004 프로토타입 위에서 | game-designer, art-sound-director, programmer |
+| T-107 | [진행] | P1 | 롱소드 기본 베기 3종(내려·가로·올려베기)을 키프레임 데이터로 제작·시험 (docs/09 5-2절) — 11-17 구현·자동 테스트 통과, **디렉터 확인 대기** (data/combat/longsword_basic.json, handoff/T-107.md) | game-designer, art-sound-director, programmer |
 | T-108 | [대기] | P1 | 공통 의도 사전 60개 초안 + 기기 안 매칭 모델 정확도 시험 (docs/08 v0.2) | dialogue-writer, programmer, qa-tester |
 | T-103 | [진행] | P1 | 제국·왕국 설정: 귀족 체계(docs/lore/귀족체계_초안.md), 152가문 검술 데이터(docs/lore/data/) | story-writer |
 | T-104 | [대기] | P1 | 오리진 최대 100개 목록, 오리진별 줄거리 개요·엔딩 목록 | plot-architect+story-writer |
@@ -39,3 +39,4 @@
 | T-114 | [대기] | P1 | 출신 20개 인물 카드(동료·가족·숨는 자리 후보) — T-112 양식 확정 후 | dialogue-writer |
 | T-115 | [대기] | P1 | 캐릭터 외형 설계: 셀 셰이딩 캐릭터 스타일 가이드, 출신별 복장·체형, 3D 모델 제작 방식(CC0 기반 + 자체 수정) 조사 | art-sound-director, programmer |
 | T-116 | [대기] | P1 | 캐릭터 생성 시스템 설계: 신분·나이·성별·재산·직업·재능 1·특성 4 → 외형·능력·대사 반영 | game-designer, experience-designer |
+| T-117 | [진행] | P0 | 디렉터 피드백(11-17): 걷기·달리기 느낌 개선, 점프, 바닥 재질별 발소리 — 11-17 구현·자동 테스트 통과, **디렉터 확인 대기** (handoff/T-107.md에 함께 기록) | programmer, art-sound-director |

@@ -1,29 +1,52 @@
 import { describe, expect, it } from 'vitest';
-import { stepPlayer, WALK_SPEED, RUN_SPEED, PLAYER_RADIUS, WORLD_HALF, type Obstacle, type PlayerState } from '../../src/sim/player';
+import { makePlayer, stepPlayer, JUMP_SPEED, GRAVITY, WALK_SPEED, RUN_SPEED, PLAYER_RADIUS, WORLD_HALF, type Obstacle, type PlayerState } from '../../src/sim/player';
 
-const start: PlayerState = { x: 0, z: 0, yaw: 0, pitch: 0 };
+const start: PlayerState = makePlayer();
 const run = (s: PlayerState, input: any, sec: number, obs: Obstacle[] = []) => {
   for (let i = 0; i < sec * 60; i++) s = stepPlayer(s, input, 1 / 60, obs);
   return s;
 };
 
 describe('플레이어 이동', () => {
-  it('앞으로 1초 걸으면 -z 방향으로 걷는 속도만큼 간다', () => {
+  it('걷기: 바로 최고 속도가 아니라 가속해서 걷는 속도에 이른다', () => {
+    const s1 = stepPlayer(start, { forward: 1, strafe: 0, run: false }, 1 / 60, []);
+    expect(Math.hypot(s1.vx, s1.vz)).toBeLessThan(WALK_SPEED * 0.5);
     const s = run(start, { forward: 1, strafe: 0, run: false }, 1);
     expect(s.x).toBeCloseTo(0, 5);
-    expect(s.z).toBeCloseTo(-WALK_SPEED, 3);
+    expect(s.vz).toBeCloseTo(-WALK_SPEED, 3);
+    expect(s.z).toBeLessThan(-WALK_SPEED * 0.8);
   });
   it('달리면 더 빠르다', () => {
-    const s = run(start, { forward: 1, strafe: 0, run: true }, 1);
-    expect(s.z).toBeCloseTo(-RUN_SPEED, 3);
+    const s = run(start, { forward: 1, strafe: 0, run: true }, 1.5);
+    expect(s.vz).toBeCloseTo(-RUN_SPEED, 3);
+  });
+  it('손을 떼면 감속해서 멈춘다', () => {
+    let s = run(start, { forward: 1, strafe: 0, run: true }, 1.5);
+    s = run(s, { forward: 0, strafe: 0, run: false }, 0.5);
+    expect(Math.hypot(s.vx, s.vz)).toBe(0);
   });
   it('대각선이 더 빠르지 않다', () => {
     const s = run(start, { forward: 1, strafe: 1, run: false }, 1);
-    expect(Math.hypot(s.x, s.z)).toBeCloseTo(WALK_SPEED, 3);
+    expect(Math.hypot(s.vx, s.vz)).toBeCloseTo(WALK_SPEED, 3);
   });
   it('바라보는 방향을 따른다 (90도 왼쪽으로 돌면 -x로 간다)', () => {
     const s = run({ ...start, yaw: Math.PI / 2 }, { forward: 1, strafe: 0, run: false }, 1);
-    expect(s.x).toBeCloseTo(-WALK_SPEED, 3);
+    expect(s.vx).toBeCloseTo(-WALK_SPEED, 3);
+  });
+  it('점프: 약 0.7m 올라갔다가 땅에 내려온다', () => {
+    let s = stepPlayer(start, { forward: 0, strafe: 0, run: false, jump: true }, 1 / 60, []);
+    expect(s.onGround).toBe(false);
+    let top = 0;
+    for (let i = 0; i < 120; i++) { s = stepPlayer(s, { forward: 0, strafe: 0, run: false }, 1 / 60, []); top = Math.max(top, s.y); }
+    expect(top).toBeCloseTo((JUMP_SPEED * JUMP_SPEED) / (2 * GRAVITY), 1);
+    expect(s.onGround).toBe(true);
+    expect(s.y).toBe(0);
+  });
+  it('공중에서는 다시 점프할 수 없다', () => {
+    let s = stepPlayer(start, { forward: 0, strafe: 0, run: false, jump: true }, 1 / 60, []);
+    const vy = s.vy;
+    s = stepPlayer(s, { forward: 0, strafe: 0, run: false, jump: true }, 1 / 60, []);
+    expect(s.vy).toBeLessThan(vy);
   });
   it('집(사각형)을 뚫고 지나가지 못한다', () => {
     const house: Obstacle = { kind: 'box', x: 0, z: -3, hw: 2, hd: 1 };

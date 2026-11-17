@@ -11,11 +11,26 @@ export class Input {
   onToggleCamera: () => void = () => {};
   onSave: () => void = () => {};
   onLoad: () => void = () => {};
+  onJump: () => void = () => {};
+  onAttack: (id: string) => void = () => {};
+  onToggleSword: () => void = () => {};
+  /** 첫 입력 때 한 번 (소리 켜기용) */
+  onFirstInput: () => void = () => {};
 
   constructor(private el: HTMLElement) {
+    const first = () => this.onFirstInput();
+    window.addEventListener('pointerdown', first);
+    window.addEventListener('touchstart', first, { passive: true });
     window.addEventListener('keydown', (e) => {
+      first();
+      if (e.code === 'Space') e.preventDefault();
       if (e.repeat) return this.keys.add(e.code);
       this.keys.add(e.code);
+      if (e.code === 'Space') this.onJump();
+      if (e.code === 'Digit1') this.onAttack('oberhau');
+      if (e.code === 'Digit2') this.onAttack('mittelhau');
+      if (e.code === 'Digit3') this.onAttack('unterhau');
+      if (e.code === 'KeyR') this.onToggleSword();
       if (e.code === 'KeyV') this.onToggleCamera();
       if (e.code === 'F5' || e.code === 'KeyK') { e.preventDefault(); this.onSave(); }
       if (e.code === 'F9' || e.code === 'KeyL') { e.preventDefault(); this.onLoad(); }

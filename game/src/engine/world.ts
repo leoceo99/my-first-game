@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { Obstacle } from '../sim/player';
+import { PLAZA, ROAD_HALF_WIDTH } from '../sim/surface';
 import { toon, toonMesh } from './toon';
 
 /** 점검용 작은 중세 마을: 흙길, 집 6채, 나무, 우물. 모두 기본 도형(에셋 없음). */
@@ -24,11 +25,30 @@ export function buildWorld(scene: THREE.Scene): Obstacle[] {
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
   scene.add(ground);
-  const road = new THREE.Mesh(new THREE.PlaneGeometry(4, 80), toon(0x7a6347));
+  const road = new THREE.Mesh(new THREE.PlaneGeometry(ROAD_HALF_WIDTH * 2, 80), toon(0x7a6347));
   road.rotation.x = -Math.PI / 2;
   road.position.y = 0.01;
   road.receiveShadow = true;
   scene.add(road);
+  // 우물 광장 돌바닥 (sim/surface.ts의 PLAZA와 같은 자리·크기)
+  const plaza = new THREE.Mesh(new THREE.CircleGeometry(PLAZA.r, 40), toon(0x8a8680));
+  plaza.rotation.x = -Math.PI / 2;
+  plaza.position.set(PLAZA.x, 0.02, PLAZA.z);
+  plaza.receiveShadow = true;
+  scene.add(plaza);
+  const seams = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.CircleGeometry(PLAZA.r, 40)),
+    new THREE.LineBasicMaterial({ color: 0x4d4a46 }),
+  );
+  seams.rotation.x = -Math.PI / 2;
+  seams.position.set(PLAZA.x, 0.03, PLAZA.z);
+  scene.add(seams);
+  for (let r = 1.2; r < PLAZA.r; r += 1.1) {
+    const ring = new THREE.Mesh(new THREE.RingGeometry(r, r + 0.04, 40), new THREE.MeshBasicMaterial({ color: 0x5f5b56 }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(PLAZA.x, 0.025, PLAZA.z);
+    scene.add(ring);
+  }
 
   const houses: [number, number, number, number, number][] = [
     // x, z, 폭, 깊이, 회전(0 또는 90도)
@@ -77,4 +97,38 @@ export function buildWorld(scene: THREE.Scene): Obstacle[] {
   obstacles.push({ kind: 'circle', x: 0, z: 9, r: 1 });
 
   return obstacles;
+}
+
+export const DUMMY = { x: 3.5, z: -1.5, r: 0.28, yMin: 0.3, yMax: 1.8 };
+
+/** 베기 연습용 짚 허수아비. 맞으면 흔들린다. */
+export function buildDummy(scene: THREE.Scene) {
+  const root = new THREE.Group();
+  root.position.set(DUMMY.x, 0, DUMMY.z);
+  const pole = toonMesh(new THREE.CylinderGeometry(0.06, 0.07, 2, 6), 0x4a3424, 0.04);
+  pole.position.y = 1;
+  const sway = new THREE.Group();
+  sway.position.y = 0.2;
+  const body = toonMesh(new THREE.CylinderGeometry(0.26, 0.3, 1.1, 10), 0xb8963f, 0.05);
+  body.position.y = 0.9;
+  const arms = toonMesh(new THREE.CylinderGeometry(0.07, 0.07, 1.3, 6), 0xb8963f, 0.04);
+  arms.position.y = 1.25;
+  arms.rotation.z = Math.PI / 2;
+  const head = toonMesh(new THREE.SphereGeometry(0.2, 10, 8), 0xc9a75a, 0.04);
+  head.position.y = 1.65;
+  sway.add(body, arms, head);
+  root.add(pole, sway);
+  scene.add(root);
+  let angle = 0, vel = 0, axisX = 0, axisZ = 1;
+  return {
+    obstacle: { kind: 'circle' as const, x: DUMMY.x, z: DUMMY.z, r: DUMMY.r },
+    /** 맞은 방향(수평 단위 벡터)으로 밀린다 */
+    hit(dx: number, dz: number) { axisX = dz; axisZ = -dx; vel += 3.5; },
+    update(dt: number) {
+      // 용수철처럼 되돌아온다
+      vel += (-60 * angle - 4 * vel) * dt;
+      angle += vel * dt;
+      sway.setRotationFromAxisAngle(new THREE.Vector3(axisX, 0, axisZ).normalize(), angle * 0.25);
+    },
+  };
 }
