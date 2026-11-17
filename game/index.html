@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>개발 골격 점검</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #0d0c0f; color: #e8e2d6; overflow: hidden;
+        font-family: system-ui, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
+      #app { position: fixed; inset: 0; }
+      #hud { position: fixed; top: 12px; left: 12px; padding: 8px 12px; background: rgba(0,0,0,.55);
+        border-radius: 6px; font-size: 14px; line-height: 1.5; pointer-events: none; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="hud"><div id="title"></div><div id="fps">fps: -</div></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

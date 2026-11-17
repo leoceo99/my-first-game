@@ -1,0 +1,26 @@
+{
+  "name": "dark-fantasy-rpg",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "중세 다크 판타지 3D RPG (가제) — 게임 본체",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run",
+    "e2e": "vite build && playwright test --trace off",
+    "check": "npm run test && npm run e2e",
+    "artifact": "tsc --noEmit && vite build --mode artifact && node scripts/check-artifact.mjs"
+  },
+  "dependencies": {
+    "three": "0.187.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/three": "0.187.0",
+    "typescript": "^5.9.3",
+    "vite": "8.3.8",
+    "vite-plugin-singlefile": "2.3.4",
+    "vitest": "5.1.0"
+  }
+}
