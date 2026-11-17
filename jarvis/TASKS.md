@@ -11,7 +11,7 @@
 | T-001 | [완료] | P0 | 비전·레퍼런스·기획서·세계관 틀·기술설계·로드맵 초안 | 자비스 | docs/00~06 작성 |
 | T-002 | [완료] | P0 | 팀 구성(에이전트 6종), 자비스 운영 체계 | 자비스 | .claude/agents, jarvis/ |
 | T-003 | [완료] | P0 | 디렉터 검토: 기획 방향과 미정 사항(❓) 답변 | 디렉터 | 답변 반영 (2026-11-12) |
-| T-004 | [승인됨] | P0 | 기술 검증 프로토타입: 3D 캐릭터 이동, 1·3인칭 전환, 셀 셰이딩 장면, 저장/불러오기 | programmer, art | 플레이 링크 공유, fps 측정 |
+| T-004 | [진행] | P0 | 기술 검증 프로토타입: 3D 캐릭터 이동, 1·3인칭 전환, 셀 셰이딩 장면, 저장/불러오기 | programmer, art | 플레이 링크 공유, fps 측정 |
 | T-005 | [완료] | P0 | 개발 기반: Vite+TS 골격, Vitest/Playwright 자동 테스트, 아티팩트 배포 스크립트 | programmer, qa | 명령 한 번으로 테스트·배포 (11-17 야간: `game/`, 보고서 jarvis/reports/2026-11-17.md) |
 | T-006 | [대기] | P1 | 대화·분기 데이터 형식 설계: 분기 + 인물 카드 + 선택지 문장 + AI 주관식 연결 (docs/08) | programmer, plot-architect, dialogue-writer | 결정 기록(ADR) |
 | T-009 | [완료] | P0 | 팀 13명 구성 상세, 정보 공유 방식 (docs/07) | 자비스 | 에이전트 12종 |
@@ -32,8 +32,8 @@
 | T-103 | [진행] | P1 | 제국·왕국 설정: 귀족 체계(docs/lore/귀족체계_초안.md), 152가문 검술 데이터(docs/lore/data/) | story-writer |
 | T-104 | [대기] | P1 | 오리진 최대 100개 목록, 오리진별 줄거리 개요·엔딩 목록 | plot-architect+story-writer |
 | T-105 | [대기] | P1 | 게임 제목·시리즈 이름 후보 | story |
-| T-110 | [완료] | P0 | 엔딩도감 v1.1 (v3.1 반영, 공통 결말 C-01~C-09) | plot-architect |
-| T-111 | [진행] | P0 | 출신 20개 의심 설계 v1 → 비평 7.2 → v1.1 수정 중 (docs/lore/출신20_의심설계_v1.md) | plot-architect, story-critic |
+| T-110 | [완료] | P1 | 엔딩도감 v1.1: 출신20 v3.1 반영, 공통 결말 C-01~C-09, 309개 (docs/lore/엔딩도감_v1.md, handoff/T-110.md). 남은 의문: O19 「회색 망아지」 그림 중복 → 비평가 | plot-architect, story-critic |
+| T-111 | [진행] | P1 | 출신 20개 의심 설계 v1 → 비평 7.2 조건부 통과(필수 수정 12) → v1.1 비평 반영 중 (docs/lore/출신20_의심설계_v1.md, handoff/T-111.md) | plot-architect, story-critic |
 | T-112 | [진행] | P0 | **인물 장부 1차**: 인물 카드 양식 + 공통 핵심 인물(황제·열쇠의 기둥·대악마·7마왕 등) 카드 (docs/lore/인물/) | dialogue-writer, story-critic |
 | T-113 | [진행] | P0 | 옛 신 10명 설정(이름·성격·봉인 장소·시련) + 복선 장부·설정 장부 정리 | lore-keeper, story-writer |
 | T-114 | [대기] | P1 | 출신 20개 인물 카드(동료·가족·숨는 자리 후보) — T-112 양식 확정 후 | dialogue-writer |
