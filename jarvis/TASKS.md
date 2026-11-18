@@ -34,7 +34,7 @@
 | T-105 | [대기] | P1 | 게임 제목·시리즈 이름 후보 | story |
 | T-110 | [완료] | P1 | 엔딩도감 v1.1: 출신20 v3.1 반영, 공통 결말 C-01~C-09, 309개 (docs/lore/엔딩도감_v1.md, handoff/T-110.md). 남은 의문: O19 「회색 망아지」 그림 중복 → 비평가 | plot-architect, story-critic |
 | T-111 | [진행] | P1 | 출신 20개 의심 설계 v1 → 비평 7.2 조건부 통과(필수 수정 12) → v1.1 비평 반영 중 (docs/lore/출신20_의심설계_v1.md, handoff/T-111.md) | plot-architect, story-critic |
-| T-112 | [진행] | P0 | **인물 장부 1차**: 인물 카드 양식 + 공통 핵심 인물(황제·열쇠의 기둥·대악마·7마왕 등) 카드 (docs/lore/인물/) | dialogue-writer, story-critic |
+| T-112 | [진행] | P0 | **인물 장부 1차**: 인물 카드 양식 + 공통 핵심 인물(황제·열쇠의 기둥·대악마·7마왕 등) 카드 (docs/lore/인물/) — 11-19 재검토 7.5 조건부(반려 없음, 남은 필수 4: 1·4·5·6) | dialogue-writer, story-critic |
 | T-113 | [진행] | P0 | 옛 신 10명 설정(이름·성격·봉인 장소·시련) + 복선 장부·설정 장부 정리 | lore-keeper, story-writer |
 | T-114 | [대기] | P1 | 출신 20개 인물 카드(동료·가족·숨는 자리 후보) — T-112 양식 확정 후 | dialogue-writer |
 | T-115 | [대기] | P1 | 캐릭터 외형 설계: 셀 셰이딩 캐릭터 스타일 가이드, 출신별 복장·체형, 3D 모델 제작 방식(CC0 기반 + 자체 수정) 조사 | art-sound-director, programmer |
