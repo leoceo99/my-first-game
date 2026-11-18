@@ -28,7 +28,7 @@
 | T-102 | [진행] | P0 | 마법·연금술·주술 체계 공동 설계 (docs/lore/힘의체계_초안.md) | 디렉터+story+design |
 | T-106 | [진행] | P0 | 악마 6단계 위계 (docs/lore/악마_위계_초안.md) | 디렉터+story-writer+lore-keeper |
 | T-107 | [진행] | P1 | 롱소드 기본 베기 3종(내려·가로·올려베기)을 키프레임 데이터로 제작·시험 (docs/09 5-2절) — 11-17 구현·자동 테스트 통과, **디렉터 확인 대기** (data/combat/longsword_basic.json, handoff/T-107.md) | game-designer, art-sound-director, programmer |
-| T-108 | [대기] | P1 | 공통 의도 사전 60개 초안 + 기기 안 매칭 모델 정확도 시험 (docs/08 v0.2) | dialogue-writer, programmer, qa-tester |
+| T-108 | [대기] | P1 | 공통 의도 사전 60개 초안 + 기기 안 매칭 모델 정확도 시험 (docs/08 v0.2) — 11-19 야간: 의도 60개 목록·예문 초안 `docs/13_공통의도사전_초안.md`(결정 3건 대기), 정확도 시험은 아직 | dialogue-writer, programmer, qa-tester |
 | T-103 | [진행] | P1 | 제국·왕국 설정: 귀족 체계(docs/lore/귀족체계_초안.md), 152가문 검술 데이터(docs/lore/data/) | story-writer |
 | T-104 | [대기] | P1 | 오리진 최대 100개 목록, 오리진별 줄거리 개요·엔딩 목록 | plot-architect+story-writer |
 | T-105 | [대기] | P1 | 게임 제목·시리즈 이름 후보 | story |
