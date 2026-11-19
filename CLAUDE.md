@@ -37,7 +37,7 @@
 | **팀 세션** (11-19 신설) | 4: 스토리 · 디자인 · 개발 · 아트·사운드 | 팀마다 `claude/team-<팀>` | 팀장 역할. 자기 팀 에이전트로 일하고 총괄이 병합. 상세 `jarvis/TEAMS.md` |
 - **낮과 밤 (11-17 디렉터)**: 디렉터가 있을 때의 일은 **총괄 세션에서 직접**(서브에이전트 포함) 한다. 야간 통합 세션(눈+밤의 손)은 디렉터가 없는 시간에, 사용량 한도가 `allowed`일 때만 돈다. 낮에는 야간 세션에 일을 보내지 않는다(급한 것은 운영 일지 "야간에 맡김").
 - **동시 작업 (11-19 디렉터 지시로 확대)**: 팀 세션 4개가 동시에 일할 수 있다. 팀 세션마다 서브에이전트는 동시에 2개 이하. 총괄은 서브에이전트 3개 이하. 사용량이 `allowed_warning`이면 팀 세션은 한 번에 2개만 돌리고 작업자는 Sonnet, `rejected`면 모두 멈춘다. 오상 회의 위원은 회의 중에만 5개까지.
-- 대화 창구는 **총괄 세션 「자비스 총괄」 하나**다. 팀 세션·야간 세션의 결과도 총괄이 모아 보고한다.
+- 대화 창구는 **총괄 세션 「자비스 총괄」(`session_01BfrX532rVVZCmEf5539R2x`, 11-19 교대) 하나**다. 팀 세션·야간 세션의 결과도 총괄이 모아 보고한다.
 - 작업마다 **파일 범위**를 정하고(`jarvis/TASKS.md`), 그 밖의 파일은 고치지 않는다. `CLAUDE.md`, `TODO.md`는 총괄만 고친다.
 - 이 체계가 만들지 않은 브랜치는 읽기만 한다.
 
@@ -48,11 +48,11 @@
 
 ## 6. 팀과 회의
 - **오상 회의**(5인): council-ji(지·설계자) · council-in(인·대변자) · council-ui(의·감시자, 규칙 거부권) · council-ye(예·조율자) · council-sin(신·검증자). 규칙: `jarvis/COUNCIL.md`
-- **팀 26명 (11-19 확대: 자비스 1 + 에이전트 25)** — 상세 `jarvis/TEAMS.md`
-  - **스토리팀(5)**: story-writer · plot-architect · dialogue-writer · lore-keeper · story-critic
-  - **디자인팀(6)**: game-designer · experience-designer · player-advocate · combat-designer · level-designer · quest-designer
-  - **개발팀(7)**: programmer(리드) · engine-programmer · gameplay-programmer · tools-programmer · ai-dialogue-engineer · qa-tester · localizer
-  - **아트·사운드팀(7)**: art-sound-director(리드) · technical-artist · environment-artist · character-artist · animator · sound-designer · composer
+- **팀 30명 (11-19 확대: 자비스 1 + 에이전트 29, 팀마다 도우미 1명 포함)** — 상세 `jarvis/TEAMS.md`
+  - **스토리팀(6)**: story-writer · plot-architect · dialogue-writer · lore-keeper · story-critic · story-steward(도우미)
+  - **디자인팀(7)**: game-designer · experience-designer · player-advocate · combat-designer · level-designer · quest-designer · design-steward(도우미)
+  - **개발팀(8)**: programmer(리드) · engine-programmer · gameplay-programmer · tools-programmer · ai-dialogue-engineer · qa-tester · localizer · dev-steward(도우미)
+  - **아트·사운드팀(8)**: art-sound-director(리드) · technical-artist · environment-artist · character-artist · animator · sound-designer · composer · art-steward(도우미)
 - 상세: `docs/07_팀_운영_상세.md`. 일을 맡길 때는 관련 문서 경로, 파일 범위, 완료 기준, 검토자를 함께 준다. 끝나면 `jarvis/handoff/작업ID.md`.
 - 세계관 문서는 **비평가 검토를 거친 뒤** 디렉터에게 올린다.
 
@@ -63,7 +63,7 @@
 - 모든 대화 장면은 주관식 입력 → 의도 매칭(장면마다 50~60개 의도) 구조 (`docs/08`).
 
 ## 8. 기술 원칙 (`docs/03_기술설계.md`)
-- TypeScript + Three.js 웹 게임. 일반 윈도우 노트북(내장 그래픽)에서 30fps 이상.
+- TypeScript + Three.js 웹 게임. 일반 윈도우 노트북(내장 그래픽)에서 30fps 이상(화질 낮음 기준). **디렉터 시험 기기는 게이밍 노트북**(11-19).
 - **그래픽은 사실적(리얼) 3D** (11-19 디렉터 결정, 셀 셰이딩 폐기). 성능은 화질 단계로 지킨다. `docs/decisions/2026-11-19_디렉터_결정.md`
 - 콘텐츠는 데이터 파일로. 모든 문장은 ID와 맥락 메모를 가진다.
 - 에셋은 CC0 또는 상업 이용 가능 라이선스만, 출처 기록. 애니메이션(검술 동작 등)은 팀이 직접 제작한다.
