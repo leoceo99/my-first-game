@@ -7,8 +7,8 @@ import koIntents from '../../../locales/ko/intents.json';
 import koElderNight from '../../../locales/ko/scenes/test/elder_night.json';
 import type { CharacterDef, FlagLedger, IntentDef, LocaleTable, Scene } from './types';
 
-export const INTENTS = intentsJson as IntentDef[];
-export const FLAGS = flagsJson as FlagLedger;
+export const INTENTS = intentsJson as unknown as IntentDef[];
+export const FLAGS = flagsJson as unknown as FlagLedger;
 export const CHARACTERS: Record<string, CharacterDef> = { [c900.id]: c900 as CharacterDef };
 export const SCENES: Scene[] = [elderNight as unknown as Scene];
 /** 장면 문장 표: 파일 경로 → 표 (검사기의 "안 쓰는 문장" 알림용) */

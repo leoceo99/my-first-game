@@ -31,6 +31,18 @@
       #bench-note { font-size: 12px; opacity: .8; }
       #bench-close { position: absolute; top: 4px; right: 6px; font: inherit; color: var(--ink); background: transparent; border: 0; font-size: 18px; cursor: pointer; }
       #btns { flex-wrap: wrap; max-width: calc(100% - 20px); justify-content: flex-end; }
+      #talk-prompt { bottom: calc(96px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%); cursor: pointer; border-color: var(--accent); }
+      #talk { left: 50%; transform: translateX(-50%); bottom: calc(10px + env(safe-area-inset-bottom, 0px)); width: min(640px, calc(100% - 20px)); box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; z-index: 5; background: rgba(18, 14, 12, 0.9); }
+      #talk-log { max-height: 34vh; overflow-y: auto; font-size: 14px; }
+      #talk-log p { margin: 4px 0; }
+      #talk-log .you { color: #d9c7a6; }
+      #talk-log .sys { opacity: .7; font-size: 12px; }
+      #talk-form, #talk-foot, #talk-choices { display: flex; gap: 6px; flex-wrap: wrap; }
+      #talk-foot { justify-content: space-between; }
+      #talk-input { flex: 1 1 200px; min-width: 0; font: inherit; color: var(--ink); background: rgba(0,0,0,.35); border: 1px solid var(--edge); border-radius: 4px; padding: 6px 8px; }
+      #talk button { font: inherit; font-size: 13px; color: var(--ink); background: transparent; border: 1px solid var(--edge); border-radius: 4px; padding: 6px 10px; cursor: pointer; }
+      #talk button:hover, #talk button:focus-visible, #talk-input:focus { border-color: var(--accent); outline: none; }
+      #talk-foot button { font-size: 12px; opacity: .8; }
       [hidden] { display: none !important; }
     </style>
   </head>
@@ -41,6 +53,13 @@
     <div id="acts"><button id="btn-cut1"></button><button id="btn-cut2"></button><button id="btn-cut3"></button><button id="btn-sword"></button><button id="btn-jump" class="big"></button></div>
     <div id="helpbox" class="panel"><div id="help"></div><div id="help-touch"></div></div>
     <div id="toast" class="panel" hidden></div>
+    <div id="talk-prompt" class="panel" hidden></div>
+    <div id="talk" class="panel" hidden>
+      <div id="talk-log" aria-live="polite"></div>
+      <div id="talk-choices" hidden></div>
+      <form id="talk-form"><input id="talk-input" autocomplete="off" maxlength="120" /><button id="talk-send" type="submit"></button><button id="talk-choose" type="button"></button></form>
+      <div id="talk-foot"><button id="talk-rewind" type="button"></button><button id="talk-close" type="button"></button></div>
+    </div>
     <div id="bench" class="panel" hidden><div id="bench-title"></div><pre id="bench-rows"></pre><div id="bench-note"></div><button id="bench-close">×</button></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

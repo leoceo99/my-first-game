@@ -2,7 +2,9 @@ import * as THREE from 'three';
 import { buildDummy, buildWorld, DUMMY } from './engine/world';
 import { buildRig, BLADE_BASE, BLADE_TIP } from './engine/rig';
 import { CameraRig } from './engine/camera';
-import { Input } from './engine/input';
+import { Input, isTyping } from './engine/input';
+import { TalkUI } from './engine/talk';
+import { SCENES } from './sim/dialogue/data';
 import { Sfx } from './engine/audio';
 import { BladeTrail } from './engine/trail';
 import { FpsMeter } from './sim/fps';
@@ -46,6 +48,14 @@ const dummy = buildDummy(scene);
 obstacles.push(dummy.obstacle);
 const hero = buildRig();
 scene.add(hero.root);
+// 대화 시험 장면의 장로 (E-2): 우물 광장 서쪽. 임시로 주인공과 같은 몸을 쓴다
+const ELDER = { x: -2.6, z: 6.4, yaw: -2.3 };
+const elder = buildRig();
+elder.root.position.set(ELDER.x, 0, ELDER.z);
+elder.root.rotation.y = ELDER.yaw;
+elder.root.scale.setScalar(0.95);
+scene.add(elder.root);
+obstacles.push({ kind: 'circle', x: ELDER.x, z: ELDER.z, r: 0.35 });
 const rig = new CameraRig(cam);
 const trail = new BladeTrail(scene);
 const sfx = new Sfx();
@@ -88,9 +98,9 @@ const showSound = () => text('btn-sound', sfx.muted ? 'ui.proto.sound_off' : 'ui
 showCam();
 showSound();
 let toastTimer = 0;
-function toast(id: string) {
+function toast(id: string, vars: Record<string, string | number> = {}) {
   const el = $('toast');
-  el.textContent = t(S, id);
+  el.textContent = t(S, id, vars);
   el.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => (el.hidden = true), 2200);
@@ -167,6 +177,18 @@ function doAttack(id: string) {
   attack = startOrQueue(attack, SWORD, id);
 }
 
+// ── 대화
+const talk = new TalkUI(SCENES[0], S, toast);
+const nearElder = () => Math.hypot(player.x - ELDER.x, player.z - ELDER.z) < 2.4;
+function startTalk() { if (nearElder() && !talk.isOpen && !(bench && !bench.done)) { attack = null; talk.open(); } }
+$('talk-prompt').textContent = t(S, 'ui.talk.prompt');
+$('talk-prompt').addEventListener('click', startTalk);
+window.addEventListener('keydown', (e) => {
+  if (isTyping(e)) { if (e.code === 'Escape') talk.close(); return; }
+  if (e.code === 'KeyE' && !e.repeat) startTalk();
+  if (e.code === 'Escape') talk.close();
+});
+
 // ── 입력
 const input = new Input(renderer.domElement);
 input.onFirstInput = () => sfx.unlock();
@@ -190,6 +212,7 @@ tap('btn-quality', () => setQuality(nextQuality(quality), true));
 tap('btn-bench', startBench);
 tap('bench-close', () => { $('bench').hidden = true; });
 window.addEventListener('keydown', (e) => {
+  if (isTyping(e)) return;
   if (e.code === 'KeyQ' && !e.repeat) setQuality(nextQuality(quality), true);
   if (e.code === 'KeyB' && !e.repeat) startBench();
 });
@@ -199,6 +222,7 @@ window.addEventListener('keydown', (e) => {
   setPlayer(x: number, z: number, yaw: number) { player = makePlayer(x, z, yaw, 0.12); gait = newGait(); },
   setQuality(l: QualityLevel) { setQuality(l, false); },
   startBench,
+  talk: () => talk.debug(),
 };
 
 // ── 반복
@@ -225,6 +249,7 @@ function loop(now: number) {
 
   // 이동 (공격 중에는 느리게, 공격 중 점프 불가)
   let mv = input.move();
+  if (talk.isOpen) mv = { forward: 0, strafe: 0, run: false }; // 대화 중에는 멈춘다
   // 성능 측정 중: 입력 대신 정해진 동작(천천히 걸으며 한 바퀴)
   const step = bench?.current() ?? null;
   if (step) { player.yaw = step.yaw; player.pitch = 0.12; mv = { ...mv, forward: step.phase === 'measure' ? 0.35 : 0, strafe: 0, run: false }; }
@@ -260,6 +285,9 @@ function loop(now: number) {
     swordPose = clip ? sampleClip(SWORD, clip, attack!.time) : guardPose(SWORD);
     if (attack) { body.spineYaw *= 0.3; body.hipsYaw *= 0.3; }
   }
+  elder.apply(locomotionPose(0, 0, 0, false, elapsed * 0.7), null);
+  $('talk-prompt').hidden = talk.isOpen || !nearElder();
+  $('helpbox').hidden = talk.isOpen;
   hero.root.position.set(player.x, player.y, player.z);
   hero.root.rotation.y = player.yaw;
   hero.apply(body, swordPose);

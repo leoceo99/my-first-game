@@ -1,5 +1,11 @@
 import type { MoveInput } from '../sim/player';
 
+/** 글 입력 칸에서 누른 키인가 */
+export const isTyping = (e: Event) => {
+  const el = e.target as HTMLElement | null;
+  return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+};
+
 /** 키보드(WASD·방향키·Shift) + 마우스 끌기/포인터 잠금 + 터치(왼쪽 반=이동, 오른쪽 반=시점). */
 export class Input {
   private keys = new Set<string>();
@@ -23,6 +29,7 @@ export class Input {
     window.addEventListener('touchstart', first, { passive: true });
     window.addEventListener('keydown', (e) => {
       first();
+      if (isTyping(e)) return; // 대화 입력 칸에 글을 쓰는 중에는 조작 키로 보지 않는다
       if (e.code === 'Space') e.preventDefault();
       if (e.repeat) return this.keys.add(e.code);
       this.keys.add(e.code);
