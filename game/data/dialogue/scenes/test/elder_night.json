@@ -1,0 +1,90 @@
+{
+  "id": "scene.test.elder_night",
+  "_메모": "E-2 시험 장면. docs/12 3-4 예시(마을 장로가 어젯밤 일을 묻는다)를 실제로 돌려 보기 위한 것. 정사(공식 설정) 아님.",
+  "tier": "normal",
+  "cast": ["C-900"],
+  "start": "open",
+  "nodes": {
+    "open": {
+      "say": [{ "line": "scene.test.elder_night.c900_echo", "repeatAcrossLives": true }],
+      "go": "q1"
+    },
+    "q1": {
+      "say": [
+        { "line": "scene.test.elder_night.c900_01", "when": "trust(C-900) <= 0" },
+        { "line": "scene.test.elder_night.c900_02", "when": "trust(C-900) > 0" },
+        { "line": "scene.test.elder_night.c900_03", "when": "knows('장로의아들') && life >= 2" }
+      ],
+      "ask": {
+        "intents": "common50",
+        "byFamily": {
+          "믿는다": { "go": "q2", "do": ["trust(C-900) += 1"] },
+          "따진다": { "go": "end_cold", "do": ["trust(C-900) -= 1"] },
+          "떠본다": { "go": "q2" },
+          "숨긴다": { "go": "q2", "do": ["trust(C-900) -= 1"] }
+        },
+        "byIntent": {
+          "bargain": { "go": "q2" },
+          "accuse": { "go": "end_cold", "do": ["trust(C-900) -= 2", "add SURE '우물가=장로'"] },
+          "leave": { "go": "end_leave" }
+        },
+        "replies": {
+          "truth": ["scene.test.elder_night.c900_r_truth"],
+          "lie": ["scene.test.elder_night.c900_r_lie"],
+          "threaten": ["scene.test.elder_night.c900_r_threaten"],
+          "accuse": ["scene.test.elder_night.c900_r_accuse"],
+          "bargain": ["scene.test.elder_night.c900_r_bargain"],
+          "silence": ["scene.test.elder_night.c900_r_silence"],
+          "greet": ["scene.test.elder_night.c900_r_greet"]
+        },
+        "familyReplies": {
+          "믿는다": ["scene.test.elder_night.c900_f_trust_01", "scene.test.elder_night.c900_f_trust_02"],
+          "따진다": ["scene.test.elder_night.c900_f_press_01", "scene.test.elder_night.c900_f_press_02"],
+          "떠본다": ["scene.test.elder_night.c900_f_probe_01", "scene.test.elder_night.c900_f_probe_02"],
+          "숨긴다": ["scene.test.elder_night.c900_f_hide_01", "scene.test.elder_night.c900_f_hide_02"]
+        },
+        "unclear": { "say": ["scene.test.elder_night.c900_q1_again"], "then": "default:q2" }
+      }
+    },
+    "q2": {
+      "say": [
+        { "line": "scene.test.elder_night.c900_10", "when": "trust(C-900) > 0" },
+        { "line": "scene.test.elder_night.c900_11" }
+      ],
+      "ask": {
+        "intents": "common50 + ['name_son']",
+        "sceneIntents": [{ "id": "name_son", "family": "따진다", "name": "장로의 아들을 지목" }],
+        "byFamily": {
+          "믿는다": { "go": "end_warm", "do": ["set knows.장로의아들 = true"] },
+          "따진다": { "go": "end_cold", "do": ["trust(C-900) -= 1"] },
+          "떠본다": { "go": "end_wary" },
+          "숨긴다": { "go": "end_wary" }
+        },
+        "byIntent": {
+          "name_son": { "go": "end_son", "when": "knows('장로의아들')" },
+          "leave": { "go": "end_leave" }
+        },
+        "replies": {
+          "truth": ["scene.test.elder_night.c900_r2_truth"],
+          "lie": ["scene.test.elder_night.c900_r2_lie"],
+          "name_son": [
+            { "line": "scene.test.elder_night.c900_r2_son", "when": "knows('장로의아들')" },
+            "scene.test.elder_night.c900_r2_son_guess"
+          ]
+        },
+        "familyReplies": {
+          "믿는다": ["scene.test.elder_night.c900_f2_trust"],
+          "따진다": ["scene.test.elder_night.c900_f2_press"],
+          "떠본다": ["scene.test.elder_night.c900_f2_probe"],
+          "숨긴다": ["scene.test.elder_night.c900_f2_hide"]
+        },
+        "unclear": { "say": ["scene.test.elder_night.c900_q2_again"], "then": "default:end_wary" }
+      }
+    },
+    "end_warm": { "say": ["scene.test.elder_night.c900_end_warm"], "end": true },
+    "end_cold": { "say": ["scene.test.elder_night.c900_end_cold"], "end": true },
+    "end_wary": { "say": ["scene.test.elder_night.c900_end_wary"], "end": true },
+    "end_son": { "say": ["scene.test.elder_night.c900_end_son"], "end": true },
+    "end_leave": { "say": ["scene.test.elder_night.c900_end_leave"], "end": true }
+  }
+}
