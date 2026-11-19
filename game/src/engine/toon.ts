@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-// 셀 셰이딩 도구: 3단 명암 재질 + 검은 외곽선(뒤집은 껍데기 방식).
+// [11-19 보관] 만화풍 셀 셰이딩 도구. 디렉터 결정으로 더 이상 쓰지 않는다(삭제 금지 규칙으로 보관). 새 재질은 materials.ts.
 let gradient: THREE.DataTexture | null = null;
 function gradientMap() {
   if (!gradient) {

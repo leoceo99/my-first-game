@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { buildDummy, buildWorld, DUMMY } from './engine/world';
+import { applyLook } from './engine/look';
 import { buildRig, BLADE_BASE, BLADE_TIP } from './engine/rig';
 import { CameraRig } from './engine/camera';
 import { Input } from './engine/input';
@@ -25,10 +26,9 @@ const app = $('app');
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // 내장 그래픽 대비 상한
 renderer.setSize(app.clientWidth, app.clientHeight);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFShadowMap;
 app.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
+applyLook(renderer, scene); // 사실적 조명·그림자·톤 매핑·안개 (engine/look.ts)
 const cam = new THREE.PerspectiveCamera(62, app.clientWidth / app.clientHeight, 0.05, 150);
 const obstacles = buildWorld(scene);
 const dummy = buildDummy(scene);
@@ -132,6 +132,7 @@ tap('btn-sound', () => { sfx.setMuted(!sfx.muted); showSound(); });
 
 // ── 개발용: 자동 테스트가 주인공을 옮길 때 쓴다
 (window as any).__dev = {
+  scene, renderer, // 성능 측정용(A-1)
   setPlayer(x: number, z: number, yaw: number) { player = makePlayer(x, z, yaw, 0.12); gait = newGait(); },
 };
 

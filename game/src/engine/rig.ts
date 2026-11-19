@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { ARM, LEG, armFK, solveTwoBone, type BodyPose, type Vec3 } from '../sim/pose';
 import type { SwordPose } from '../sim/sword';
-import { toonMesh } from './toon';
+import { mat, solid } from './materials';
 
 const HIP_HEIGHT = 0.95;
 const SHOULDER_L: Vec3 = [-0.2, 0.52, 0];
@@ -24,16 +24,16 @@ export function buildRig() {
   const spine = new THREE.Group();
   hips.add(spine);
 
-  const cloth = 0x5a6470, cloak = 0x3a1f1c, skin = 0xd9b08c, dark = 0x2e2a26;
-  const torso = toonMesh(new THREE.CylinderGeometry(0.24, 0.2, 0.6, 10), cloth);
+  const cloth = mat('cloth'), cloak = mat('cloak'), skin = mat('skin'), dark = mat('leather'), boot = mat('leather', 1, 1, 0x4a3424);
+  const torso = solid(new THREE.CylinderGeometry(0.24, 0.2, 0.6, 14), cloth);
   torso.position.y = 0.3;
-  const cape = toonMesh(new THREE.CylinderGeometry(0.26, 0.34, 0.75, 10, 1, true, -Math.PI * 0.32, Math.PI * 0.64), cloak);
+  const cape = solid(new THREE.CylinderGeometry(0.26, 0.34, 0.75, 14, 1, true, -Math.PI * 0.32, Math.PI * 0.64), cloak);
   cape.position.set(0, 0.22, 0.03); // 등 쪽(+z)을 덮는다
-  const pelvis = toonMesh(new THREE.CylinderGeometry(0.21, 0.22, 0.2, 10), dark);
+  const pelvis = solid(new THREE.CylinderGeometry(0.21, 0.22, 0.2, 14), dark);
   pelvis.position.y = -0.02;
-  const head = toonMesh(new THREE.SphereGeometry(0.15, 14, 10), skin);
+  const head = solid(new THREE.SphereGeometry(0.15, 20, 14), skin);
   head.position.y = 0.76;
-  const hood = toonMesh(new THREE.SphereGeometry(0.175, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.55), cloak);
+  const hood = solid(new THREE.SphereGeometry(0.175, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.55), cloak);
   hood.position.y = 0.77;
   hood.rotation.x = 0.9; // 두건이 뒤통수를 덮게 뒤로 기울임
   spine.add(torso, cape, head, hood);
@@ -43,13 +43,13 @@ export function buildRig() {
   const legs = [-0.1, 0.1].map((x) => {
     const hip = new THREE.Group();
     hip.position.set(x, -0.02, 0);
-    const thigh = toonMesh(new THREE.CylinderGeometry(0.085, 0.07, LEG.thigh, 8), dark);
+    const thigh = solid(new THREE.CylinderGeometry(0.085, 0.07, LEG.thigh, 10), dark);
     thigh.position.y = -LEG.thigh / 2;
     const knee = new THREE.Group();
     knee.position.y = -LEG.thigh;
-    const shin = toonMesh(new THREE.CylinderGeometry(0.068, 0.055, LEG.shin, 8), dark);
+    const shin = solid(new THREE.CylinderGeometry(0.068, 0.055, LEG.shin, 10), dark);
     shin.position.y = -LEG.shin / 2;
-    const foot = toonMesh(new THREE.BoxGeometry(0.1, 0.07, 0.22), 0x3b2a1e);
+    const foot = solid(new THREE.BoxGeometry(0.1, 0.07, 0.22), boot);
     foot.position.set(0, -LEG.shin - 0.0, -0.05);
     knee.add(shin, foot);
     hip.add(thigh, knee);
@@ -60,13 +60,13 @@ export function buildRig() {
   // 팔: 위팔·아래팔을 따로 두고 매 프레임 위치·방향을 정한다
   const arm = () => {
     const upper = new THREE.Group();
-    const um = toonMesh(new THREE.CylinderGeometry(0.06, 0.05, ARM.upper, 8), cloth);
+    const um = solid(new THREE.CylinderGeometry(0.06, 0.05, ARM.upper, 10), cloth);
     um.position.y = -ARM.upper / 2;
     upper.add(um);
     const fore = new THREE.Group();
-    const fm = toonMesh(new THREE.CylinderGeometry(0.05, 0.042, ARM.fore - 0.05, 8), cloth);
+    const fm = solid(new THREE.CylinderGeometry(0.05, 0.042, ARM.fore - 0.05, 10), cloth);
     fm.position.y = -(ARM.fore - 0.05) / 2;
-    const hand = toonMesh(new THREE.SphereGeometry(0.05, 8, 6), skin);
+    const hand = solid(new THREE.SphereGeometry(0.05, 12, 8), skin);
     hand.position.y = -ARM.fore;
     fore.add(fm, hand);
     spine.add(upper, fore);
@@ -76,15 +76,15 @@ export function buildRig() {
 
   // 롱소드
   const sword = new THREE.Group();
-  const grip = toonMesh(new THREE.CylinderGeometry(0.02, 0.022, 0.26, 6), 0x3b2a1e, 0.02);
+  const grip = solid(new THREE.CylinderGeometry(0.02, 0.022, 0.26, 8), mat('leather'));
   grip.position.y = -0.09;
-  const pommel = toonMesh(new THREE.SphereGeometry(0.035, 8, 6), 0x9a8c6a, 0.02);
+  const pommel = solid(new THREE.SphereGeometry(0.035, 12, 8), mat('brass'));
   pommel.position.y = -0.24;
-  const guardBar = toonMesh(new THREE.BoxGeometry(0.24, 0.03, 0.03), 0x9a8c6a, 0.02);
+  const guardBar = solid(new THREE.BoxGeometry(0.24, 0.03, 0.03), mat('brass'));
   guardBar.position.y = 0.06;
   const bladeGeo = new THREE.BoxGeometry(0.045, BLADE_TIP - BLADE_BASE, 0.008);
   bladeGeo.translate(0, (BLADE_TIP + BLADE_BASE) / 2, 0);
-  const blade = toonMesh(bladeGeo, 0xc9ccd2, 0.012);
+  const blade = solid(bladeGeo, mat('steel'));
   sword.add(grip, pommel, guardBar, blade);
   spine.add(sword);
 
