@@ -28,7 +28,9 @@
 ## 3. 세션 등록부
 | 팀 | 세션 ID | 브랜치 | 만든 날 |
 |---|---|---|---|
-| 스토리팀 | (생성 후 기록) | `claude/team-story` | 11-19 |
-| 디자인팀 | (생성 후 기록) | `claude/team-design` | 11-19 |
-| 개발팀 | (생성 후 기록) | `claude/team-dev` | 11-19 |
-| 아트·사운드팀 | (생성 후 기록) | `claude/team-art` | 11-19 |
+| 스토리팀 | `session_01BfrX53LyQZ5wVfni94VvZy` | `claude/team-story` | 11-19 |
+| 디자인팀 | `session_01BfrX4zZ1NUVH1au1HDMLW4` | `claude/team-design` | 11-19 |
+| 개발팀 | `session_01BfrX4ysZoMGvD8HxoHVvLc` | `claude/team-dev` | 11-19 |
+| 아트·사운드팀 | `session_01BfrX4zFeLs8LaUZjWysPKn` | `claude/team-art` | 11-19 |
+
+- 모델: 스토리팀·개발팀은 Opus, 디자인팀·아트·사운드팀은 Sonnet(사용량 절약).
