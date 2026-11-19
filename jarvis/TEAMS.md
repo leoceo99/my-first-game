@@ -6,7 +6,7 @@
 ## 1. 조직도
 | 팀 | 팀 세션(팀장) | 팀원(에이전트) | 하는 일 |
 |---|---|---|---|
-| 총괄 | **자비스 총괄** (`session_01BfrX51dXWaNKuWw2fGatYw`) | 오상 회의 5인(council-*) | 디렉터와 대화, 계획, 배정, 검수, 병합, 보고 |
+| 총괄 | **자비스 총괄** (`session_01BfrX532rVVZCmEf5539R2x`, 11-19 교대. 옛 `session_01BfrX51dXWaNKuWw2fGatYw`는 은퇴) | 오상 회의 5인(council-*) | 디렉터와 대화, 계획, 배정, 검수, 병합, 보고 |
 | 스토리팀 (5) | 팀 세션 「스토리팀」 | story-writer · plot-architect · dialogue-writer · lore-keeper · story-critic | 세계관·출신·엔딩·인물·대사·비평 |
 | 디자인팀 (6) | 팀 세션 「디자인팀」 | game-designer · experience-designer · player-advocate · **combat-designer** · **level-designer** · **quest-designer** | 시스템·전투·공간·퀘스트·감정 곡선·플레이어 시선 |
 | 개발팀 (7) | 팀 세션 「개발팀」 | programmer(리드) · **engine-programmer** · **gameplay-programmer** · **tools-programmer** · **ai-dialogue-engineer** · qa-tester · localizer | 엔진·규칙 코드·도구·의도 매칭·검사·번역 |
