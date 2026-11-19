@@ -1,0 +1,719 @@
+[
+  {
+    "id": "truth",
+    "family": "믿는다",
+    "tier": "common",
+    "name": "사실대로 말함",
+    "desc": "본 것·아는 것을 그대로",
+    "confusable": [
+      "half_truth",
+      "confess"
+    ],
+    "no": 1
+  },
+  {
+    "id": "confess",
+    "family": "믿는다",
+    "tier": "important",
+    "name": "고백",
+    "desc": "자기 잘못·비밀을 털어놓음",
+    "confusable": [
+      "truth",
+      "apologize"
+    ],
+    "no": 2
+  },
+  {
+    "id": "entrust",
+    "family": "믿는다",
+    "tier": "common",
+    "name": "맡김",
+    "desc": "물건·일·비밀을 상대에게 맡김",
+    "confusable": [
+      "ask_help",
+      "share_secret"
+    ],
+    "no": 3
+  },
+  {
+    "id": "ask_help",
+    "family": "믿는다",
+    "tier": "common",
+    "name": "도움 요청",
+    "desc": "상대에게 도와 달라고 함",
+    "confusable": [
+      "entrust",
+      "plead"
+    ],
+    "no": 4
+  },
+  {
+    "id": "promise",
+    "family": "믿는다",
+    "tier": "common",
+    "name": "약속·맹세",
+    "desc": "무엇을 하겠다고 다짐",
+    "confusable": [
+      "vague_promise",
+      "agree"
+    ],
+    "no": 5
+  },
+  {
+    "id": "agree",
+    "family": "믿는다",
+    "tier": "common",
+    "name": "동의·수락",
+    "desc": "제안·말에 찬성",
+    "confusable": [
+      "feign_agree",
+      "submit"
+    ],
+    "no": 6
+  },
+  {
+    "id": "comfort",
+    "family": "믿는다",
+    "tier": "common",
+    "name": "위로",
+    "desc": "상대의 슬픔·두려움을 달램",
+    "confusable": [
+      "pity",
+      "praise"
+    ],
+    "no": 7
+  },
+  {
+    "id": "pity",
+    "family": "믿는다",
+    "tier": "common",
+    "name": "동정",
+    "desc": "상대의 처지를 딱하게 여김",
+    "confusable": [
+      "comfort",
+      "insult"
+    ],
+    "no": 8
+  },
+  {
+    "id": "thank",
+    "family": "믿는다",
+    "tier": "common",
+    "name": "감사",
+    "desc": "고마움 표시",
+    "confusable": [
+      "praise",
+      "flatter"
+    ],
+    "no": 9
+  },
+  {
+    "id": "apologize",
+    "family": "믿는다",
+    "tier": "common",
+    "name": "사과",
+    "desc": "잘못을 인정하고 용서를 구함",
+    "confusable": [
+      "confess",
+      "plead"
+    ],
+    "no": 10
+  },
+  {
+    "id": "praise",
+    "family": "믿는다",
+    "tier": "common",
+    "name": "칭찬·인정",
+    "desc": "상대의 능력·행동을 높이 삼",
+    "confusable": [
+      "flatter",
+      "thank"
+    ],
+    "no": 11
+  },
+  {
+    "id": "share_secret",
+    "family": "믿는다",
+    "tier": "important",
+    "name": "정보 건넴",
+    "desc": "남에 관한 비밀·정보를 알려 줌",
+    "confusable": [
+      "truth",
+      "warn"
+    ],
+    "no": 12
+  },
+  {
+    "id": "warn",
+    "family": "믿는다",
+    "tier": "common",
+    "name": "경고",
+    "desc": "상대를 위해 위험을 알림",
+    "confusable": [
+      "threaten",
+      "share_secret"
+    ],
+    "no": 13
+  },
+  {
+    "id": "greet",
+    "family": "믿는다",
+    "tier": "common",
+    "name": "인사",
+    "desc": "처음 만나거나 다시 만나 인사",
+    "confusable": [
+      "thank"
+    ],
+    "no": 14
+  },
+  {
+    "id": "offer_help",
+    "family": "믿는다",
+    "tier": "common",
+    "name": "도움 제안",
+    "desc": "내가 돕겠다고 나섬",
+    "confusable": [
+      "promise",
+      "bargain"
+    ],
+    "no": 15
+  },
+  {
+    "id": "accuse",
+    "family": "따진다",
+    "tier": "common",
+    "name": "단정·고발",
+    "desc": "상대(나 남)를 범인·거짓으로 단정 → `SURE` 기록",
+    "confusable": [
+      "expose",
+      "ask_who"
+    ],
+    "no": 16
+  },
+  {
+    "id": "threaten",
+    "family": "따진다",
+    "tier": "common",
+    "name": "위협",
+    "desc": "해를 끼치겠다고 겁줌",
+    "confusable": [
+      "warn",
+      "blackmail"
+    ],
+    "no": 17
+  },
+  {
+    "id": "demand",
+    "family": "따진다",
+    "tier": "common",
+    "name": "요구·명령",
+    "desc": "무엇을 하라고 강하게 요구",
+    "confusable": [
+      "ask_help",
+      "invoke_rank"
+    ],
+    "no": 18
+  },
+  {
+    "id": "refuse",
+    "family": "따진다",
+    "tier": "common",
+    "name": "거절",
+    "desc": "제안·요구를 받아들이지 않음",
+    "confusable": [
+      "disagree",
+      "deflect"
+    ],
+    "no": 19
+  },
+  {
+    "id": "disagree",
+    "family": "따진다",
+    "tier": "common",
+    "name": "반박",
+    "desc": "말의 내용이 틀렸다고 맞섬",
+    "confusable": [
+      "refuse",
+      "expose"
+    ],
+    "no": 20
+  },
+  {
+    "id": "insult",
+    "family": "따진다",
+    "tier": "common",
+    "name": "모욕",
+    "desc": "상대를 깎아내림",
+    "confusable": [
+      "rebuke",
+      "joke"
+    ],
+    "no": 21
+  },
+  {
+    "id": "rebuke",
+    "family": "따진다",
+    "tier": "common",
+    "name": "꾸짖음",
+    "desc": "잘못을 나무람·훈계",
+    "confusable": [
+      "insult",
+      "disagree"
+    ],
+    "no": 22
+  },
+  {
+    "id": "expose",
+    "family": "따진다",
+    "tier": "common",
+    "name": "거짓 지적",
+    "desc": "상대의 말이 거짓이라고 짚음",
+    "confusable": [
+      "accuse",
+      "disagree"
+    ],
+    "no": 23
+  },
+  {
+    "id": "challenge",
+    "family": "따진다",
+    "tier": "important",
+    "name": "도전",
+    "desc": "결투·내기·시험을 걸어옴",
+    "confusable": [
+      "threaten",
+      "bargain"
+    ],
+    "no": 24
+  },
+  {
+    "id": "invoke_rank",
+    "family": "따진다",
+    "tier": "common",
+    "name": "신분 내세움",
+    "desc": "지위·가문·직함으로 누름",
+    "confusable": [
+      "demand",
+      "invoke_law"
+    ],
+    "no": 25
+  },
+  {
+    "id": "invoke_law",
+    "family": "따진다",
+    "tier": "common",
+    "name": "법·계약 근거",
+    "desc": "법·규칙·계약·관습을 들어 따짐",
+    "confusable": [
+      "invoke_rank",
+      "invoke_faith"
+    ],
+    "no": 26
+  },
+  {
+    "id": "invoke_faith",
+    "family": "따진다",
+    "tier": "important",
+    "name": "신앙에 호소",
+    "desc": "신·경전·맹세의 힘에 기댐",
+    "confusable": [
+      "invoke_law",
+      "plead"
+    ],
+    "no": 27
+  },
+  {
+    "id": "blackmail",
+    "family": "따진다",
+    "tier": "important",
+    "name": "약점 협박",
+    "desc": "상대의 비밀로 압박",
+    "confusable": [
+      "threaten",
+      "bargain"
+    ],
+    "no": 28
+  },
+  {
+    "id": "curse",
+    "family": "따진다",
+    "tier": "common",
+    "name": "저주·악담",
+    "desc": "불행을 빎",
+    "confusable": [
+      "insult",
+      "threaten"
+    ],
+    "no": 29
+  },
+  {
+    "id": "declare_attack",
+    "family": "따진다",
+    "tier": "common",
+    "name": "공격 선언",
+    "desc": "지금 행동(공격·체포)하겠다고 선언",
+    "confusable": [
+      "threaten",
+      "challenge"
+    ],
+    "no": 30
+  },
+  {
+    "id": "ask_who",
+    "family": "떠본다",
+    "tier": "common",
+    "name": "누구 묻기",
+    "desc": "사람의 정체를 물음",
+    "confusable": [
+      "accuse",
+      "ask_what"
+    ],
+    "no": 31
+  },
+  {
+    "id": "ask_what",
+    "family": "떠본다",
+    "tier": "common",
+    "name": "무엇 묻기",
+    "desc": "일·물건의 내용을 물음",
+    "confusable": [
+      "ask_why",
+      "ask_who"
+    ],
+    "no": 32
+  },
+  {
+    "id": "ask_why",
+    "family": "떠본다",
+    "tier": "common",
+    "name": "이유 묻기",
+    "desc": "까닭·동기를 물음",
+    "confusable": [
+      "ask_what",
+      "expose"
+    ],
+    "no": 33
+  },
+  {
+    "id": "ask_where",
+    "family": "떠본다",
+    "tier": "common",
+    "name": "어디 묻기",
+    "desc": "장소·위치를 물음",
+    "confusable": [
+      "ask_when"
+    ],
+    "no": 34
+  },
+  {
+    "id": "ask_when",
+    "family": "떠본다",
+    "tier": "common",
+    "name": "언제 묻기",
+    "desc": "시점·순서를 물음",
+    "confusable": [
+      "ask_where"
+    ],
+    "no": 35
+  },
+  {
+    "id": "ask_back",
+    "family": "떠본다",
+    "tier": "common",
+    "name": "질문으로 되받기",
+    "desc": "대답 대신 되물음",
+    "confusable": [
+      "deflect",
+      "ask_why"
+    ],
+    "no": 36
+  },
+  {
+    "id": "bargain",
+    "family": "떠본다",
+    "tier": "common",
+    "name": "거래 제안",
+    "desc": "대가를 주고받자고 함",
+    "confusable": [
+      "bribe",
+      "offer_help"
+    ],
+    "no": 37
+  },
+  {
+    "id": "bribe",
+    "family": "떠본다",
+    "tier": "common",
+    "name": "뇌물",
+    "desc": "몰래 돈·물건으로 마음을 삼",
+    "confusable": [
+      "bargain",
+      "flatter"
+    ],
+    "no": 38
+  },
+  {
+    "id": "flatter",
+    "family": "떠본다",
+    "tier": "common",
+    "name": "아첨",
+    "desc": "이익을 위해 치켜세움",
+    "confusable": [
+      "praise",
+      "bribe"
+    ],
+    "no": 39
+  },
+  {
+    "id": "feign_knowledge",
+    "family": "떠본다",
+    "tier": "common",
+    "name": "아는 척 떠보기",
+    "desc": "모르면서 아는 척 상대 반응을 봄",
+    "confusable": [
+      "bait",
+      "accuse"
+    ],
+    "no": 40
+  },
+  {
+    "id": "bait",
+    "family": "떠본다",
+    "tier": "important",
+    "name": "미끼 흘리기",
+    "desc": "일부러 틀린 말을 흘려 반응을 봄",
+    "confusable": [
+      "feign_knowledge",
+      "lie"
+    ],
+    "no": 41
+  },
+  {
+    "id": "hypothetical",
+    "family": "떠본다",
+    "tier": "important",
+    "name": "가정 질문",
+    "desc": "\"만약 ~라면\"으로 떠봄",
+    "confusable": [
+      "ask_why",
+      "bargain"
+    ],
+    "no": 42
+  },
+  {
+    "id": "test_loyalty",
+    "family": "떠본다",
+    "tier": "important",
+    "name": "편 묻기",
+    "desc": "누구 편인지 시험",
+    "confusable": [
+      "ask_who",
+      "hypothetical"
+    ],
+    "no": 43
+  },
+  {
+    "id": "joke",
+    "family": "떠본다",
+    "tier": "common",
+    "name": "농담·비꼼",
+    "desc": "가볍게 웃기거나 비꼼",
+    "confusable": [
+      "insult",
+      "deflect"
+    ],
+    "no": 44
+  },
+  {
+    "id": "request_proof",
+    "family": "떠본다",
+    "tier": "common",
+    "name": "증거 요구",
+    "desc": "근거를 보이라고 함",
+    "confusable": [
+      "expose",
+      "challenge"
+    ],
+    "no": 45
+  },
+  {
+    "id": "lie",
+    "family": "숨긴다",
+    "tier": "common",
+    "name": "거짓말",
+    "desc": "알면서 사실과 다르게 말함",
+    "confusable": [
+      "bait",
+      "deny"
+    ],
+    "no": 46
+  },
+  {
+    "id": "deflect",
+    "family": "숨긴다",
+    "tier": "common",
+    "name": "얼버무림",
+    "desc": "대답을 피하고 화제를 돌림",
+    "confusable": [
+      "ask_back",
+      "delay"
+    ],
+    "no": 47
+  },
+  {
+    "id": "silence",
+    "family": "숨긴다",
+    "tier": "common",
+    "name": "침묵",
+    "desc": "말하지 않음 (빈 입력·\"…\" 포함)",
+    "confusable": [
+      "deflect",
+      "refuse"
+    ],
+    "no": 48
+  },
+  {
+    "id": "deny",
+    "family": "숨긴다",
+    "tier": "common",
+    "name": "부인",
+    "desc": "혐의·사실을 아니라고 함",
+    "confusable": [
+      "lie",
+      "disagree"
+    ],
+    "no": 49
+  },
+  {
+    "id": "feign_ignorance",
+    "family": "숨긴다",
+    "tier": "common",
+    "name": "모르는 척",
+    "desc": "알면서 모른다고 함",
+    "confusable": [
+      "lie",
+      "silence"
+    ],
+    "no": 50
+  },
+  {
+    "id": "false_identity",
+    "family": "숨긴다",
+    "tier": "important",
+    "name": "신분 속이기",
+    "desc": "다른 사람인 척함",
+    "confusable": [
+      "lie",
+      "invoke_rank"
+    ],
+    "no": 51
+  },
+  {
+    "id": "delay",
+    "family": "숨긴다",
+    "tier": "common",
+    "name": "미루기",
+    "desc": "지금 말고 나중에",
+    "confusable": [
+      "deflect",
+      "vague_promise"
+    ],
+    "no": 52
+  },
+  {
+    "id": "leave",
+    "family": "숨긴다",
+    "tier": "common",
+    "name": "자리 뜨기·작별",
+    "desc": "대화를 끝내고 떠남",
+    "confusable": [
+      "refuse",
+      "delay"
+    ],
+    "no": 53
+  },
+  {
+    "id": "submit",
+    "family": "숨긴다",
+    "tier": "common",
+    "name": "굴복",
+    "desc": "압박에 꺾여 따름",
+    "confusable": [
+      "agree",
+      "plead"
+    ],
+    "no": 54
+  },
+  {
+    "id": "plead",
+    "family": "숨긴다",
+    "tier": "common",
+    "name": "애원",
+    "desc": "목숨·자비를 빎",
+    "confusable": [
+      "ask_help",
+      "apologize"
+    ],
+    "no": 55
+  },
+  {
+    "id": "shift_blame",
+    "family": "숨긴다",
+    "tier": "common",
+    "name": "남 탓",
+    "desc": "책임을 남에게 돌림",
+    "confusable": [
+      "accuse",
+      "deny"
+    ],
+    "no": 56
+  },
+  {
+    "id": "half_truth",
+    "family": "숨긴다",
+    "tier": "important",
+    "name": "반만 말함",
+    "desc": "사실 일부만 말하고 중요한 것을 뺌",
+    "confusable": [
+      "truth",
+      "lie"
+    ],
+    "no": 57
+  },
+  {
+    "id": "humble",
+    "family": "숨긴다",
+    "tier": "common",
+    "name": "자기 낮춤",
+    "desc": "몸을 낮춰 경계를 풂",
+    "confusable": [
+      "flatter",
+      "submit"
+    ],
+    "no": 58
+  },
+  {
+    "id": "vague_promise",
+    "family": "숨긴다",
+    "tier": "common",
+    "name": "빈말 약속",
+    "desc": "지킬 생각 없는 막연한 약속",
+    "confusable": [
+      "promise",
+      "delay"
+    ],
+    "no": 59
+  },
+  {
+    "id": "feign_agree",
+    "family": "숨긴다",
+    "tier": "common",
+    "name": "동의하는 척",
+    "desc": "속으로는 반대하며 맞장구",
+    "confusable": [
+      "agree",
+      "vague_promise"
+    ],
+    "no": 60
+  }
+]

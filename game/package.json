@@ -10,7 +10,9 @@
     "test": "vitest run",
     "e2e": "vite build && playwright test --trace off",
     "check": "npm run test && npm run e2e",
-    "artifact": "tsc --noEmit && vite build --mode artifact && node scripts/check-artifact.mjs"
+    "artifact": "tsc --noEmit && vite build --mode artifact && node scripts/check-artifact.mjs",
+    "check:dialogue": "vitest run tests/unit/dialogue.test.ts -t \"대화 검사기\"",
+    "intents": "node scripts/build-intents.mjs"
   },
   "dependencies": {
     "three": "0.187.0"

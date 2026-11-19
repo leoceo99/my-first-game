@@ -16,7 +16,7 @@
     "context": "현재 카메라 상태 표시. 짧은 상태 라벨."
   },
   "ui.proto.help": {
-    "text": "이동 W A S D · 달리기 Shift · 점프 Space · 시점 마우스 끌기(두 번 클릭하면 고정) · 1/3인칭 V · 검 뽑기 R · 베기 1 2 3 · 저장 K · 불러오기 L",
+    "text": "이동 W A S D · 달리기 Shift · 점프 Space · 시점 마우스 끌기(두 번 클릭하면 고정) · 1/3인칭 V · 검 뽑기 R · 베기 1 2 3 · 저장 K · 불러오기 L · 화질 Q · 성능 측정 B · 장로에게 말 걸기 E",
     "context": "키보드 조작 안내. 화면 아래 한 줄. 키 이름은 번역하지 않음."
   },
   "ui.proto.help_touch": {
@@ -78,5 +78,105 @@
   "combat.cut.unterhau": {
     "text": "올려베기",
     "context": "롱소드 기본 베기 3: 왼쪽 아래에서 오른쪽 위로 올려 벤다. 버튼·기술 이름. 원어 Unterhau(아래 베기)."
+  },
+  "ui.perf.hud": {
+    "text": "화질 {level} · 1% 저점 {low} · {ms}ms · 그리기 {draw}회 · 삼각형 {tri}천",
+    "context": "왼쪽 위 성능 표시 둘째 줄(개발용). {level}=화질 이름, {low}=느린 1% 프레임의 fps, {ms}=평균 프레임 시간, {draw}=그리기 호출 수, {tri}=삼각형 수(천 단위). 좁은 칸이라 짧게."
+  },
+  "ui.perf.quality_low": {
+    "text": "화질: 낮음",
+    "context": "화질 버튼. 누를 때마다 낮음→보통→높음 순서로 바뀜. 버튼이 작아 짧게."
+  },
+  "ui.perf.quality_medium": {
+    "text": "화질: 보통",
+    "context": "화질 버튼. 누를 때마다 낮음→보통→높음 순서로 바뀜. 버튼이 작아 짧게."
+  },
+  "ui.perf.quality_high": {
+    "text": "화질: 높음",
+    "context": "화질 버튼. 누를 때마다 낮음→보통→높음 순서로 바뀜. 버튼이 작아 짧게."
+  },
+  "ui.perf.level_low": {
+    "text": "낮음",
+    "context": "화질 단계 이름(성능 표시·측정 결과 안에 들어감). 한 단어."
+  },
+  "ui.perf.level_medium": {
+    "text": "보통",
+    "context": "화질 단계 이름(성능 표시·측정 결과 안에 들어감). 한 단어."
+  },
+  "ui.perf.level_high": {
+    "text": "높음",
+    "context": "화질 단계 이름(성능 표시·측정 결과 안에 들어감). 한 단어."
+  },
+  "ui.perf.quality_changed": {
+    "text": "화질을 바꿨습니다",
+    "context": "화질 버튼을 누른 뒤 잠깐 뜨는 알림. 담백하게."
+  },
+  "ui.perf.quality_reload": {
+    "text": "화질을 바꿨습니다. 계단 현상 줄이기는 새로 고침 후 적용됩니다",
+    "context": "화질을 바꿨는데 안티에일리어싱(가장자리 계단 줄이기)은 페이지를 다시 열어야 바뀔 때의 알림. 전문용어 대신 쉬운 말."
+  },
+  "ui.perf.auto_lowered": {
+    "text": "화면이 느려 화질을 한 단계 낮췄습니다",
+    "context": "fps가 계속 낮아 자동으로 화질을 내렸을 때의 알림. 플레이어 탓이 아니라는 담백한 안내."
+  },
+  "ui.perf.btn_bench": {
+    "text": "성능 측정",
+    "context": "누르면 약 25초 동안 화질 3단계를 차례로 재는 버튼. 버튼이 작아 짧게."
+  },
+  "ui.perf.bench_running": {
+    "text": "성능 측정 중 {pct}% (화질 {level}) — 손대지 마세요",
+    "context": "측정 진행 표시. {pct}=진행률 숫자, {level}=지금 재는 화질 이름. 측정 중 조작하면 결과가 흐트러진다는 부탁."
+  },
+  "ui.perf.bench_done": {
+    "text": "성능 측정 결과 (이 기기)",
+    "context": "측정이 끝난 뒤 뜨는 결과 상자의 제목."
+  },
+  "ui.perf.bench_row": {
+    "text": "{level}: 평균 {avg}fps · 1% 저점 {low}fps · 95% 프레임 {ms}ms 이내 · 그리기 {draw}회 · 삼각형 {tri}천",
+    "context": "결과 상자의 한 줄(화질 단계마다 한 줄). 숫자 자리 이름은 바꾸지 않음. 표처럼 보이도록 형식 유지."
+  },
+  "ui.perf.bench_note": {
+    "text": "목표: 평균 30fps 이상, 1% 저점 20fps 이상. 이 화면을 캡처해서 보내 주시면 기준 화질을 정하는 데 씁니다.",
+    "context": "결과 상자 아래 안내. 디렉터·시험 참가자가 결과를 캡처해 보내도록 부탁하는 공손한 말투."
+  },
+  "ui.talk.prompt": {
+    "text": "E: 말 걸기",
+    "context": "NPC 가까이 갔을 때 화면 가운데 아래에 뜨는 안내. 키 이름 E는 번역하지 않음. 터치 기기는 버튼 글."
+  },
+  "ui.talk.placeholder": {
+    "text": "하고 싶은 말을 적으세요",
+    "context": "대화 입력 칸의 흐린 안내 글. 플레이어가 자유롭게 문장을 쓰는 칸."
+  },
+  "ui.talk.send": {
+    "text": "말하기",
+    "context": "입력한 말을 보내는 버튼. 짧게."
+  },
+  "ui.talk.choose": {
+    "text": "말 고르기",
+    "context": "쓰기 어려울 때 예시 문장 버튼들을 펼치는 버튼(docs/08 3절). 짧게."
+  },
+  "ui.talk.close": {
+    "text": "대화 닫기",
+    "context": "대화 상자를 닫는 버튼. 짧게."
+  },
+  "ui.talk.you": {
+    "text": "나",
+    "context": "대화 기록에서 플레이어(주인공)의 말 앞에 붙는 이름. 한 글자."
+  },
+  "ui.talk.silence": {
+    "text": "(말없이 바라본다)",
+    "context": "NPC가 할 말이 다 떨어졌을 때(같은 말 반복 금지) 대신 보이는 몸짓. 괄호 포함."
+  },
+  "ui.talk.ended": {
+    "text": "대화가 끝났습니다. 다시 말을 걸면 처음부터 시험할 수 있습니다",
+    "context": "시험 장면이 끝났을 때 안내. 개발용."
+  },
+  "ui.talk.rewind": {
+    "text": "되감기(시험)",
+    "context": "개발용 버튼: 삶을 하나 넘겨 NPC 기억을 지우고 주인공 기억만 남긴다. 되감기 설정 시험용."
+  },
+  "ui.talk.rewound": {
+    "text": "삶이 되감겼습니다 ({life}번째 삶). 장로는 당신을 기억하지 못합니다",
+    "context": "되감기 버튼을 누른 뒤 알림. {life}는 숫자."
   }
 }

@@ -4,6 +4,9 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: 'tests/e2e',
   timeout: 30_000,
+  // 한 번에 하나씩: 성능 측정 테스트가 다른 테스트와 계산 자원을 나눠 쓰면 fps가 흐트러지고
+  // 걷기 거리 같은 시간 기반 검사가 실패한다 (E-1에서 확인).
+  workers: 1,
   use: { baseURL: 'http://localhost:4173', viewport: { width: 1280, height: 720 } },
   webServer: {
     command: 'npx vite preview --port 4173 --strictPort',
