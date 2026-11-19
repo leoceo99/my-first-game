@@ -1,0 +1,19 @@
+{
+  "language": "korean",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/korean-reminder.sh\"" }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/korean-reminder.sh\" | sed 's/UserPromptSubmit/SessionStart/'" }
+        ]
+      }
+    ]
+  }
+}

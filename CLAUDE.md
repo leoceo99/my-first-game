@@ -10,7 +10,7 @@
 - 통합 브랜치: `claude/friendly-wozniak-1bd340` (모든 기준 문서가 여기 있다). `main` 병합은 디렉터가 확인 후 직접 한다.
 
 ## 2. 반드시 지킬 것
-1. **모든 대화, 보고서, 문서, 생각 정리는 한국어.** 영어로 답하지 않는다(디렉터가 번역하느라 힘들다). 전문용어는 풀어서 설명한다.
+1. **모든 대화, 보고서, 문서, 생각 정리는 한국어.** 영어로 답하지 않는다(디렉터가 번역하느라 힘들다). 전문용어는 풀어서 설명한다. **설정으로 고정됨**(11-19): `.claude/settings.json`의 `language: korean` + 매 메시지 한국어 알림(`.claude/korean-reminder.sh`). 이 설정을 끄거나 지우지 않는다.
 2. 작업 전에 위의 읽기 순서를 지킨다.
 3. **승인된 작업만 진행.** 기획 방향을 바꾸는 결정, 비용이 드는 일, 외부 공개, 지우기 어려운 일은 디렉터에게 묻는다.
 4. 기획 문서(`docs/`)가 정답이다. 구현과 다르면 문서를 고치거나 묻는다. 몰래 바꾸지 않는다.
@@ -34,8 +34,10 @@
 | 작업 세션 (`create_session`) | 동시 3개 이하 | 세션마다 자기 브랜치 | 긴 작업. 자기 브랜치에만 푸시 → 총괄이 검토 후 병합 |
 | 브리핑 전용 세션 (눈) | 1 | 푸시 안 함 | `jarvis/briefing.md` |
 | 야간 전용 세션 (밤의 손) | 1 | 자기 브랜치 | `jarvis/NIGHTLY.md` |
+| **팀 세션** (11-19 신설) | 4: 스토리 · 디자인 · 개발 · 아트·사운드 | 팀마다 `claude/team-<팀>` | 팀장 역할. 자기 팀 에이전트로 일하고 총괄이 병합. 상세 `jarvis/TEAMS.md` |
 - **낮과 밤 (11-17 디렉터)**: 디렉터가 있을 때의 일은 **총괄 세션에서 직접**(서브에이전트 포함) 한다. 야간 통합 세션(눈+밤의 손)은 디렉터가 없는 시간에, 사용량 한도가 `allowed`일 때만 돈다. 낮에는 야간 세션에 일을 보내지 않는다(급한 것은 운영 일지 "야간에 맡김").
-- 서브에이전트 + 작업 세션은 **합계 3개 이하**로 동시에 돌린다. 예외: 오상 회의 위원은 짧은 읽기 전용 호출이라 회의 중에만 5개까지 허용(다른 작업과 겹치지 않게).
+- **동시 작업 (11-19 디렉터 지시로 확대)**: 팀 세션 4개가 동시에 일할 수 있다. 팀 세션마다 서브에이전트는 동시에 2개 이하. 총괄은 서브에이전트 3개 이하. 사용량이 `allowed_warning`이면 팀 세션은 한 번에 2개만 돌리고 작업자는 Sonnet, `rejected`면 모두 멈춘다. 오상 회의 위원은 회의 중에만 5개까지.
+- 대화 창구는 **총괄 세션 「자비스 총괄」 하나**다. 팀 세션·야간 세션의 결과도 총괄이 모아 보고한다.
 - 작업마다 **파일 범위**를 정하고(`jarvis/TASKS.md`), 그 밖의 파일은 고치지 않는다. `CLAUDE.md`, `TODO.md`는 총괄만 고친다.
 - 이 체계가 만들지 않은 브랜치는 읽기만 한다.
 
@@ -46,9 +48,11 @@
 
 ## 6. 팀과 회의
 - **오상 회의**(5인): council-ji(지·설계자) · council-in(인·대변자) · council-ui(의·감시자, 규칙 거부권) · council-ye(예·조율자) · council-sin(신·검증자). 규칙: `jarvis/COUNCIL.md`
-- **스토리팀**: story-writer · plot-architect · dialogue-writer · lore-keeper · story-critic
-- **디자인팀**: game-designer · experience-designer · player-advocate
-- **개발·아트·현지화**: programmer · qa-tester · art-sound-director · localizer
+- **팀 26명 (11-19 확대: 자비스 1 + 에이전트 25)** — 상세 `jarvis/TEAMS.md`
+  - **스토리팀(5)**: story-writer · plot-architect · dialogue-writer · lore-keeper · story-critic
+  - **디자인팀(6)**: game-designer · experience-designer · player-advocate · combat-designer · level-designer · quest-designer
+  - **개발팀(7)**: programmer(리드) · engine-programmer · gameplay-programmer · tools-programmer · ai-dialogue-engineer · qa-tester · localizer
+  - **아트·사운드팀(7)**: art-sound-director(리드) · technical-artist · environment-artist · character-artist · animator · sound-designer · composer
 - 상세: `docs/07_팀_운영_상세.md`. 일을 맡길 때는 관련 문서 경로, 파일 범위, 완료 기준, 검토자를 함께 준다. 끝나면 `jarvis/handoff/작업ID.md`.
 - 세계관 문서는 **비평가 검토를 거친 뒤** 디렉터에게 올린다.
 
@@ -60,6 +64,7 @@
 
 ## 8. 기술 원칙 (`docs/03_기술설계.md`)
 - TypeScript + Three.js 웹 게임. 일반 윈도우 노트북(내장 그래픽)에서 30fps 이상.
+- **그래픽은 사실적(리얼) 3D** (11-19 디렉터 결정, 셀 셰이딩 폐기). 성능은 화질 단계로 지킨다. `docs/decisions/2026-11-19_디렉터_결정.md`
 - 콘텐츠는 데이터 파일로. 모든 문장은 ID와 맥락 메모를 가진다.
 - 에셋은 CC0 또는 상업 이용 가능 라이선스만, 출처 기록. 애니메이션(검술 동작 등)은 팀이 직접 제작한다.
 - 버그를 고치면 재발 방지 테스트를 추가한다.
