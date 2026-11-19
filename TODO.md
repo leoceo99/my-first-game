@@ -1,5 +1,7 @@
 # TODO.md — 자비스 운영 현황판 (세션 관리)
 
+> **11-19 추가 지시: 이번 주 작업 중단**(디렉터가 재개할 때까지). 야간 예약 꺼 둠. 다음 주 첫 작업은 전수 조사·체크리스트(`jarvis/TASKS.md` 맨 위). 팀은 시작 신호가 있을 때만 일함(`jarvis/TEAMS.md` 4절).
+
 > **11-19 디렉터 지시**: 대화 창구는 총괄 세션 「자비스 총괄」(옛 제목 "We March as One game clone") 하나. 항상 한국어(설정 고정). 팀 26명·팀 세션 4개 동시 작업 → `jarvis/TEAMS.md`. 할 일은 `jarvis/TASKS.md`(지금 당장 / 결정 / 앞으로). 그래픽은 사실적(리얼)으로 변경 → `docs/decisions/2026-11-19_디렉터_결정.md`.
 
 > **11-13 통합**: 자비스 v1(세션 관리)과 v2(게임 스튜디오)를 통합 브랜치 `claude/friendly-wozniak-1bd340`으로 합쳤다. 구조도: `jarvis/README.md`. 게임 개발 할 일은 `jarvis/TASKS.md`.
