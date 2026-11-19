@@ -6,7 +6,7 @@
 
 ## 시작 전 점검 — 낮은 총괄, 밤은 이 세션 (디렉터 지시 11-17)
 > "내가 할 때는 총괄 세션에서 하고, 야간 작업은 내가 못할 때 사용량 한도가 풀리면 진행해."
-1. **디렉터가 지금 총괄 세션에서 일하는 중이면 하지 않는다.** `get_session(session_id="session_01BfrX51dXWaNKuWw2fGatYw")`의 `status_bucket`이 working이거나 `updated_at`이 30분 이내면 → 0단계(눈)만 하고 1~2단계는 건너뛴다. 운영 일지에 "디렉터 작업 중이라 손은 쉼"을 적는다.
+1. **디렉터가 지금 총괄 세션에서 일하는 중이면 하지 않는다.** `get_session(session_id="session_01BfrX532rVVZCmEf5539R2x")`의 `status_bucket`이 working이거나 `updated_at`이 30분 이내면 → 0단계(눈)만 하고 1~2단계는 건너뛴다. 운영 일지에 "디렉터 작업 중이라 손은 쉼"을 적는다.
 2. **사용량 한도를 먼저 본다.** `get_session()`(인자 없이 = 이 세션)의 `external_metadata.rate_limit_info.status`. 필드가 없으면 `allowed`로 보되, 실행 중 429가 나오면 아래처럼 멈춘다:
    - `allowed` → 진행.
    - `allowed_warning` → 0단계만 하고 손은 쉼(한도를 디렉터 낮 작업에 남긴다).

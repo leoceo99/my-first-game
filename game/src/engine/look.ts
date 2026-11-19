@@ -2,9 +2,8 @@ import * as THREE from 'three';
 import { setMetalEnv } from './materials';
 
 // 사실적 겉모습 설정(A-1): 화면 처리·조명·안개·하늘빛 반사·화면 가장자리 어둡힘.
-// 화질 단계(E-1)가 들어오면 `shadowSize`, `vignette` 같은 값을 단계별로 바꿔 부른다.
-export interface LookOptions { shadowSize: number; vignette: boolean }
-export const LOOK_DEFAULT: LookOptions = { shadowSize: 1024, vignette: true };
+export interface LookOptions { shadowSize: number }
+export const LOOK_DEFAULT: LookOptions = { shadowSize: 1024 };
 
 export const HAZE = 0x6f7a86; // 안개·배경색 (e2e 테스트의 "그려졌는지" 기준색과 같다)
 
@@ -47,11 +46,15 @@ export function applyLook(renderer: THREE.WebGLRenderer, scene: THREE.Scene, opt
   sc.left = sc.bottom = -30; sc.right = sc.top = 30; sc.far = 90;
   scene.add(sun);
 
-  // 후처리 대신 가벼운 화면 가장자리 어둡힘(비용 거의 없음)
-  if (opts.vignette) {
-    const el = document.createElement('div');
-    el.id = 'vignette';
-    el.style.cssText = 'position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,rgba(0,0,0,0) 55%,rgba(8,6,5,0.45) 100%)';
-    renderer.domElement.parentElement?.appendChild(el);
-  }
+  // 후처리 대신 가벼운 화면 가장자리 어둡힘(비용 거의 없음). 켜고 끄기는 setPostFx
+  const el = document.createElement('div');
+  el.id = 'vignette';
+  el.style.cssText = 'position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,rgba(0,0,0,0) 55%,rgba(8,6,5,0.45) 100%)';
+  renderer.domElement.parentElement?.appendChild(el);
+}
+
+/** 화질 단계의 postFx 값에 따라 화면 효과를 켜고 끈다: none=끔, basic·full=가장자리 어둡힘 */
+export function setPostFx(level: 'none' | 'basic' | 'full') {
+  const el = document.getElementById('vignette');
+  if (el) el.style.display = level === 'none' ? 'none' : '';
 }

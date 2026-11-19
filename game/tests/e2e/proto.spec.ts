@@ -15,7 +15,7 @@ const drawnRatio = (page: Page) => page.evaluate(() => {
 test('마을이 그려지고, 걷고, 시점을 바꾸고, 저장·불러오기가 된다', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.goto('/');
+  await page.goto('/?q=low'); // 소프트웨어 렌더 환경에서 보통 화질은 느려 시간 기반 검사가 흔들린다(A-1)
   await page.waitForFunction(() => ((window as any).__game?.frames ?? 0) > 30);
   expect(await drawnRatio(page)).toBeGreaterThan(0.3);
   await page.screenshot({ path: 'test-results/third.png' });
@@ -61,7 +61,7 @@ test('마을이 그려지고, 걷고, 시점을 바꾸고, 저장·불러오기�
 });
 
 test('점프, 바닥별 발소리 횟수', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?q=low'); // 소프트웨어 렌더 환경에서 보통 화질은 느려 시간 기반 검사가 흔들린다(A-1)
   await page.waitForFunction(() => ((window as any).__game?.frames ?? 0) > 10);
   // 흙길을 걸으면 흙 발소리가 늘어난다
   await page.keyboard.down('KeyW'); await page.waitForTimeout(1500); await page.keyboard.up('KeyW');
@@ -90,7 +90,7 @@ test('점프, 바닥별 발소리 횟수', async ({ page }) => {
 test('롱소드 베기 3종이 허수아비를 맞힌다', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.goto('/');
+  await page.goto('/?q=low'); // 소프트웨어 렌더 환경에서 보통 화질은 느려 시간 기반 검사가 흔들린다(A-1)
   await page.waitForFunction(() => ((window as any).__game?.frames ?? 0) > 10);
   // 허수아비(3.5, -1.5) 앞 1.3m에서 마주 본다
   await page.evaluate(() => (window as any).__dev.setPlayer(3.5, -0.2, 0));
@@ -117,7 +117,7 @@ test('롱소드 베기 3종이 허수아비를 맞힌다', async ({ page }) => {
 });
 
 test('집을 뚫고 들어가지 못한다', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?q=low'); // 소프트웨어 렌더 환경에서 보통 화질은 느려 시간 기반 검사가 흔들린다(A-1)
   await page.waitForFunction(() => ((window as any).__game?.frames ?? 0) > 10);
   // 시작점(0,2)에서 오른쪽(+x)으로 달리면 x=8 집(폭 5, 왼쪽 벽 x=5.5)에 막힌다
   await page.keyboard.down('ShiftLeft'); await page.keyboard.down('KeyD');

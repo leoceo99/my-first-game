@@ -8,7 +8,7 @@ await new Promise(r => setTimeout(r, 3000));
 const b = await chromium.launch({ args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
 const p = await b.newPage({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
 const errs = []; p.on('pageerror', e => errs.push(e.message));
-await p.goto('http://localhost:4799/');
+await p.goto('http://localhost:4799/?q=' + (process.argv[3] ?? 'medium'));
 await p.waitForFunction(() => (window.__game?.frames ?? 0) > 30);
 await p.waitForTimeout(1500);
 await p.screenshot({ path: `${out}/${tag}_마을_3인칭.png` });
