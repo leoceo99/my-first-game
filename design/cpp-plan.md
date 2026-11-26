@@ -52,8 +52,19 @@ C++ 코드의 대부분은 C 문법이라서, 단단한 C 실행기가 가장 �
    `ostream&`/`istream&` 타입, `return {a, b};`, 직접 만든 복사 생성자(`T b = a;`, `T c(a);`, 값으로 넘기기).
    맞는 연산자가 없으면 만들 함수의 모양까지 알려 줘요.
    만든 곳: `js/c/compile.js`의 `userOp`/`invokeMember`/`noOpError`, `js/c/parser.js`의 `operatorName`.
-5. **템플릿**: 함수 템플릿과 클래스 템플릿을 쓰는 타입마다 다시 컴파일(인스턴스화)해요.
-   `std::vector<T>`, `std::pair`, `std::map`, `std::sort` 같은 STL을 이 위에 만들어요.
+5. ✅ **템플릿과 STL** (끝남):
+   - 템플릿: 함수 템플릿(넣은 값으로 T 정하기, `half<double>(7)`, T가 둘로 갈리면 알려 줘요), 클래스 템플릿(`Box<int>`,
+     타입마다 따로 만들어요), 템플릿 매개변수 여러 개. 아직 아닌 것: `template <int N>`, 클래스 템플릿의 멤버를 클래스 밖에서 만들기.
+   - 람다: `[](int a, int b) { return a < b; }`, `[&]` 캡처(만든 자리의 변수를 그대로 써요), `-> 타입`, `auto`에 담기, 템플릿에 넘기기.
+     아직 아닌 것: 매개변수의 `auto`, `[=]`의 '복사해 두기'(지금은 `[&]`처럼 동작해요).
+   - `<algorithm>`/`<numeric>`: `sort`(기본 `<`, `greater<T>()`, 람다, 함수 이름, 구조체의 `operator<`), `stable_sort`, `reverse`,
+     `find`, `find_if`, `count`, `count_if`, `max_element`, `min_element`, `fill`, `binary_search`, `accumulate`, `swap`, `min`, `max`
+   - `pair`(`make_pair`, `{a, b}`, 비교, 정렬), 구조화 바인딩(`auto [a, b] = p;`, `for (auto &[k, v] : m)`)
+   - 컨테이너: `map`/`unordered_map`(`m[k]`, `at`, `find`, `it->second`, `count`, `contains`, `insert`, `emplace`, `erase`, 키 순서로 돌기),
+     `set`/`unordered_set`, `stack`, `queue`, `priority_queue`(`greater<T>`로 작은 것부터), `deque`(`push_front`/`pop_front`),
+     `vector<int> v(a, a + n)`/`set<int> s(v.begin(), v.end())`, `for (int x : {1, 2, 3})`.
+     `unordered_` 컨테이너도 키 순서로 돌아요(진짜 C++은 순서가 정해져 있지 않아요).
+   만든 곳: `js/c/compile.js`의 `instantiateFunc`/`instantiateClass`/`lambdaExpr`/`stdAlgo`/`containerMethod`/`mapLookup`.
 6. **상속과 가상 함수, 예외**: `virtual`(객체마다 함수 표), `try`/`catch`/`throw`(JS 예외로 전달)
 
 ## 변환으로 가는 길

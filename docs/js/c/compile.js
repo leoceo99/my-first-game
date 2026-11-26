@@ -3,7 +3,7 @@
 import {
   T, Ptr, Store, FnRef, CError, ptr, arr, func, compileError, runtimeError, convert, zeroOf, zerosOf, truthy, cells, baseOf,
   alignOf, utf8, isInt, isFloat, isArith, isPtr, isArr, isScalar, is64, isVoid, isCharLike, isStruct, isFunc, isFuncPtr,
-  sameType, common, promote, typeName, friendlyType, STRING_T, vectorOf, isObj, hasObj,
+  sameType, common, promote, typeName, friendlyType, STRING_T, vectorOf, mapOf, setOf, adaptorOf, isObj, hasObj,
 } from "./types.js";
 import {
   BUILTINS, FILE_T, STDIN, STDOUT, STDERR, JumpSignal, parseFormat, retypeHeap,
@@ -507,13 +507,23 @@ export class Compiler {
     const { line } = node;
     const rt = this.rt;
     this.push();
-    const R = this.expr(node.range);
+    let rangeNode = node.range;
+    if (rangeNode.k === "initlist") {
+      // for (int x : {3, 1, 2})
+      if (!rangeNode.items.length) throw compileError(line, "빈 { } 는 for로 돌 수 없어요");
+      const et = this.value(this.expr(rangeNode.items[0]), line).t;
+      rangeNode = { k: "compound", type: arr(et, rangeNode.items.length), init: rangeNode, line };
+    }
+    const R = this.expr(rangeNode);
     let elem;
     let stride;
     let count;
     let baseOf;
     if (this.cpp && isObj(R.t)) {
       // string은 글자 하나씩, vector는 원소 하나씩
+      if (["stack", "queue", "pq"].includes(R.t.k)) {
+        throw compileError(line, `${R.t.name}는 for로 하나씩 꺼낼 수 없어요`, "while (!s.empty()) { … s.top() … s.pop(); } 처럼 꺼내요.");
+      }
       const S = this.objRef(R, line);
       elem = R.t.k === "string" ? T.char : R.t.of;
       stride = cells(elem);
@@ -534,6 +544,27 @@ export class Compiler {
     const d = node.decl;
     let cur = null;
     const fake = this.withLoad({ t: elem, lv: () => cur, varName: `${d.name}의 원소`, isConst: Boolean(R.isConst) }, line);
+    if (d.bind) {
+      // for (auto &[키, 값] : m)
+      const binder = this.bindNames(d.bind, elem, () => cur, line, R.isConst);
+      this.loops++;
+      const body = this.statement(node.body);
+      this.loops--;
+      this.pop();
+      return (f) => {
+        rt.line = line;
+        const base = baseOf(f);
+        const len = count(f);
+        for (let i = 0; i < len; i++) {
+          cur = new Ptr(base.store, base.off + i * stride);
+          binder(f);
+          const r = body(f);
+          if (r === BREAK) return NORMAL;
+          if (r === RETURN || r === GOTO) return r;
+        }
+        return NORMAL;
+      };
+    }
     let type = d.type;
     if (type.k === "auto") type = isArr(elem) ? ptr(elem.of) : elem;
     else if (type.k === "ref" && type.to.k === "auto") type = { ...type, to: elem };
@@ -1466,6 +1497,316 @@ export class Compiler {
     }
   }
 
+  // ---------- C++ 5단계: map, set, stack, queue, priority_queue ----------
+  /** [a, b] 로 나눠 받기: 구조체(pair)의 멤버마다 이름을 붙여요. 실행할 때 부르는 함수 (f) */
+  bindNames(bind, t, holderOf, line, isConst) {
+    if (!isStruct(t)) throw compileError(line, `${friendlyType(t)}는 [a, b] 로 나눠 받을 수 없어요`, "pair나 구조체를 나눠 받을 수 있어요.");
+    this.layout(t, line);
+    if (bind.names.length !== t.fields.length) {
+      throw compileError(line, `${typeName(t)}의 멤버는 ${t.fields.length}개인데 이름을 ${bind.names.length}개 썼어요`);
+    }
+    const infos = bind.names.map((name, i) => {
+      const ft = t.fields[i].type;
+      const type = { k: "ref", to: ft, size: 8, toConst: Boolean(isConst || bind.isConst) };
+      const info = { name, type, slot: this.fn.slotCount++, line, isConst: false };
+      this.declare(info);
+      this.fn.locals.push(info);
+      return { info, off: t.fields[i].off, ft };
+    });
+    const copy = !bind.ref;
+    return (f) => {
+      const p = holderOf();
+      for (const { info, off, ft } of infos) {
+        let target = new Ptr(p.store, p.off + off);
+        if (copy) {
+          // 값으로 받을 때는 복사본을 가리켜요
+          const n = cells(ft);
+          const st = new Store(n, info.name, ft);
+          st.cells = cloneCells(ft, p.store.cells.slice(p.off + off, p.off + off + n));
+          target = new Ptr(st, 0);
+        }
+        const st = new Store(1, info.name, info.type);
+        st.cells[0] = target;
+        f[info.slot] = st;
+      }
+    };
+  }
+
+  /** map/set의 키 순서 도우미: (f) => { keyAt, find, less } */
+  keyTools(type, line) {
+    const elem = type.of;
+    const unit = cells(elem);
+    const K = type.k === "map" ? type.key : elem;
+    const ku = cells(K);
+    const scalar = ku === 1 && !isStruct(K);
+    const lessOf = this.defaultLess(K, line);
+    const keyAt = (st, i) => (scalar ? st.cells[i * unit] : st.cells.slice(i * unit, i * unit + ku));
+    return (f) => {
+      const lt = lessOf(f);
+      const lower = (st, key) => {
+        let lo = 0;
+        let hi = vecLen(st);
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (lt(keyAt(st, mid), key)) lo = mid + 1;
+          else hi = mid;
+        }
+        return lo;
+      };
+      const find = (st, key) => {
+        const i = lower(st, key);
+        return i < vecLen(st) && !lt(key, keyAt(st, i)) ? i : -1;
+      };
+      return { lt, lower, find, keyAt, unit, ku, scalar };
+    };
+  }
+
+  /** 키 하나를 받는 함수 (값 또는 칸 목록) */
+  keyArg(type, node, line, what) {
+    const K = type.k === "map" ? type.key : type.of;
+    const V = this.conv(this.value(this.expr(node), line), K, line, what);
+    return V.ev;
+  }
+
+  /** 정렬된 자리에 원소 하나(칸 목록)를 넣어요. 이미 있으면 넣지 않아요 (map, set) */
+  insertSorted(st, tools, cellsArr, unique) {
+    const k = tools.scalar ? cellsArr[0] : cellsArr.slice(0, tools.ku);
+    const i = tools.lower(st, k);
+    if (unique && i < vecLen(st) && !tools.lt(k, tools.keyAt(st, i))) return [i, false];
+    st.cells.splice(i * tools.unit, 0, ...cellsArr);
+    vecResized(st);
+    return [i, true];
+  }
+
+  /** m[키]: 없으면 기본값으로 만들어 넣어요 / m.at(키): 없으면 오류 */
+  mapLookup(B, keyNode, line, create) {
+    const type = B.t;
+    if (create && B.isConst) throw compileError(line, "const map에는 [ ]를 쓸 수 없어요", "없는 키를 넣어 버릴 수 있어서예요. m.at(키)나 m.find(키)를 써요.");
+    const S = this.objRef(B, line);
+    const tools = this.keyTools(type, line);
+    const K = this.keyArg(type, keyNode, line, "map의 키");
+    const vf = type.of.fields[1];
+    const V = type.val;
+    const fresh = this.needsConstruct(V) ? this.defaultCells(V, line) : (() => { const z = zerosOf(V); return () => z.slice(); })();
+    const who = B.varName || "map";
+    const rt = this.rt;
+    const show = (k) => (typeof k === "number" || typeof k === "bigint" ? String(k) : k && k.cells ? JSON.stringify(new TextDecoder().decode(Uint8Array.from(strBytes(k)))) : "그 키");
+    const lv = (f) => {
+      const st = S(f);
+      const tl = tools(f);
+      const key = K(f);
+      let i = tl.find(st, key);
+      if (i < 0) {
+        if (!create) throw runtimeError(line, `${who}에 키 ${show(key)}가 없어요`, "at()은 없는 키면 out_of_range 예외가 나요. count(키)나 find(키)로 먼저 확인해 보세요.");
+        const kc = tl.scalar ? [key] : key;
+        [i] = this.insertSorted(st, tl, [...kc, ...fresh(f)], true);
+      }
+      void rt;
+      return new Ptr(st, i * tl.unit + vf.off);
+    };
+    return this.withLoad({ t: V, lv, isConst: Boolean(B.isConst), varName: `${who}[…]` }, line);
+  }
+
+  /** (처음 위치, 끝 위치) 로 받은 원소들의 칸 목록을 차례대로 꺼내는 함수 */
+  rangeCells(of, args, line, name) {
+    const [A, Z] = args.map((a) => this.value(this.expr(a), line));
+    if (!isPtr(A.t) || !isPtr(Z.t)) return null;
+    const src = this.need(A.t.to, line);
+    const unit = cells(src);
+    const conv = sameType(src, of) ? null : this.conv({ t: src, ev: () => null }, of, line, `'${name}'의 원소`);
+    if (conv && !isArith(src)) throw compileError(line, `${typeName(src)} 원소로 ${typeName(of)}를 만들 수 없어요`);
+    return (f) => {
+      const p = A.ev(f);
+      const q = Z.ev(f);
+      if (!p || !q || p.store !== q.store || q.off < p.off) throw runtimeError(line, `'${name}'를 만드는 처음과 끝 위치가 맞지 않아요`);
+      const out = [];
+      for (let off = p.off; off < q.off; off += unit) {
+        const v = unit === 1 && !isStruct(src) ? p.store.cells[off] : p.store.cells.slice(off, off + unit);
+        const c = conv ? convert(v, src, of) : cloneValue(src, v);
+        out.push(unit === 1 && !isStruct(of) ? [c] : cloneCells(of, c));
+      }
+      return out;
+    };
+  }
+
+  /** map, set, stack, queue, priority_queue 의 처음 값 */
+  containerValue(type, init, line, name) {
+    const of = type.of;
+    let items = null;
+    if (init.k === "initlist") items = init.items;
+    else if (init.k === "fromRange") items = [];
+    else if (init.k === "ctor") {
+      if (init.args.length === 0) return () => null;
+      if (init.args.length === 2) {
+        // set<int> s(v.begin(), v.end())
+        const range = this.rangeCells(of, init.args, line, name);
+        if (range) return this.containerValue(type, { k: "fromRange", range }, line, name);
+      }
+      if (init.args.length === 1 && init.args[0].k === "initlist") items = init.args[0].items;
+      else if (init.args.length === 1) return this.conv(this.value(this.expr(init.args[0]), line), type, line, `'${name}'의 처음 값`).ev;
+      else throw compileError(line, `'${name}'의 처음 값 모양이 맞지 않아요`);
+    } else return this.conv(this.value(this.expr(init), line), type, line, `'${name}'의 처음 값`).ev;
+    const fromRange = init.k === "fromRange" ? init.range : null;
+    const evs = fromRange ? [] : items.map((x, i) => this.elemValue(of, x, line, `${name}의 ${i + 1}번째 값`));
+    const sorted = type.k === "map" || type.k === "set" || type.k === "pq";
+    const tools = sorted ? (type.k === "pq" ? this.pqTools(type, line) : this.keyTools(type, line)) : null;
+    return (f) => {
+      const st = newVector(of, []);
+      const tl = tools ? tools(f) : null;
+      const all = fromRange ? fromRange(f) : evs.map((ev) => ev(f));
+      for (const v of all) {
+        if (!tl) st.cells.push(...v);
+        else if (type.k === "pq") this.pqPush(st, tl, v);
+        else this.insertSorted(st, tl, v, true);
+      }
+      vecResized(st);
+      return st;
+    };
+  }
+
+  /** priority_queue: 오름차순(greater면 내림차순)으로 두고, 맨 뒤가 top이에요 */
+  pqTools(type, line) {
+    const less = this.defaultLess(type.of, line);
+    const unit = cells(type.of);
+    const one = unit === 1 && !isStruct(type.of);
+    return (f) => {
+      const l = less(f);
+      return { lt: type.greater ? (a, b) => l(b, a) : l, unit, at: (st, i) => (one ? st.cells[i] : st.cells.slice(i * unit, (i + 1) * unit)) };
+    };
+  }
+
+  pqPush(st, tl, v) {
+    const x = tl.unit === 1 && v.length === 1 ? v[0] : v;
+    let lo = 0;
+    let hi = vecLen(st);
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (tl.lt(x, tl.at(st, mid))) hi = mid;
+      else lo = mid + 1;
+    }
+    st.cells.splice(lo * tl.unit, 0, ...v);
+    vecResized(st);
+  }
+
+  /** map, set, stack, queue, priority_queue 의 함수들 */
+  containerMethod(B, name, node, S) {
+    const { line } = node;
+    const rt = this.rt;
+    const type = B.t;
+    const k = type.k;
+    const elem = type.of;
+    const unit = cells(elem);
+    const who = B.varName || type.name;
+    const args = node.args;
+    const want = (min, max = min) => {
+      if (args.length < min || args.length > max) throw compileError(line, `${who}.${name}()에는 값 ${min === max ? min : `${min}~${max}`}개를 넣어요`);
+    };
+    const mutating = () => { if (B.isConst) throw compileError(line, `const인 ${who}는 ${name}()으로 바꿀 수 없어요`); };
+    const notEmpty = (st, what) => {
+      if (!vecLen(st)) throw runtimeError(line, `비어 있는 ${who}에서 ${what}()를 불렀어요`, `${what}() 전에 empty()로 비어 있는지 확인해 보세요.`);
+    };
+    const elemLv = (lv) => this.withLoad({ t: elem, lv, isConst: Boolean(B.isConst) || k === "set" || k === "pq" }, line);
+    switch (name) {
+      case "size": want(0); return { t: T.ulong, ev: (f) => BigInt(vecLen(S(f))) };
+      case "empty": want(0); return { t: T.bool, ev: (f) => (vecLen(S(f)) === 0 ? 1 : 0) };
+      case "clear": want(0); mutating(); return { t: T.void, ev: (f) => { const st = S(f); st.cells.length = 0; vecResized(st); } };
+      default: break;
+    }
+    if (k === "stack" || k === "queue" || k === "pq") {
+      const top = k === "queue" ? "front" : "top";
+      switch (name) {
+        case "push": case "emplace": {
+          want(1); mutating();
+          const item = this.elemValue(elem, args[0], line, `${who}.${name}의 값`);
+          const tools = k === "pq" ? this.pqTools(type, line) : null;
+          return { t: T.void, ev: (f) => { const v = item(f); const st = S(f); if (tools) this.pqPush(st, tools(f), v); else { st.cells.push(...v); vecResized(st); } } };
+        }
+        case "pop":
+          want(0); mutating();
+          return { t: T.void, ev: (f) => { const st = S(f); notEmpty(st, "pop"); if (k === "queue") st.cells.splice(0, unit); else st.cells.length -= unit; vecResized(st); } };
+        case "top": case "front": case "back": {
+          if (name !== top && !(k === "queue" && name === "back")) break;
+          want(0);
+          const first = name === "front";
+          return elemLv((f) => { const st = S(f); notEmpty(st, name); return new Ptr(st, first ? 0 : (vecLen(st) - 1) * unit); });
+        }
+        default: break;
+      }
+      const names = k === "queue" ? "push, pop, front, back, empty, size" : "push, pop, top, empty, size";
+      throw compileError(line, `${type.name}에는 ${name}() 함수가 없어요`, `쓸 수 있는 것: ${names}`);
+    }
+    // map, set
+    const tools = this.keyTools(type, line);
+    switch (name) {
+      case "begin": want(0); return { t: ptr(elem), ev: (f) => new Ptr(S(f), 0) };
+      case "end": want(0); return { t: ptr(elem), ev: (f) => { const st = S(f); return new Ptr(st, vecLen(st) * unit); } };
+      case "count": case "contains": case "find": {
+        want(1);
+        const K = this.keyArg(type, args[0], line, `${name}의 키`);
+        return {
+          t: name === "find" ? ptr(elem) : name === "count" ? T.ulong : T.bool,
+          ev: (f) => {
+            const st = S(f);
+            const i = tools(f).find(st, K(f));
+            if (name === "find") return new Ptr(st, (i < 0 ? vecLen(st) : i) * unit);
+            return name === "count" ? BigInt(i < 0 ? 0 : 1) : i < 0 ? 0 : 1;
+          },
+        };
+      }
+      case "at":
+        if (k !== "map") break;
+        want(1);
+        return this.mapLookup(B, args[0], line, false);
+      case "insert": case "emplace": {
+        mutating();
+        let item;
+        if (name === "emplace" && k === "map") {
+          want(2);
+          const K = this.conv(this.value(this.expr(args[0]), line), type.key, line, "키");
+          const V = this.elemValue(type.val, args[1], line, "값");
+          const kOne = cells(type.key) === 1 && !isStruct(type.key);
+          item = (f) => [...(kOne ? [K.ev(f)] : K.ev(f)), ...V(f)];
+        } else {
+          want(1);
+          item = this.elemValue(elem, args[0], line, `${who}.${name}의 값`);
+        }
+        return { t: T.bool, ev: (f) => { const st = S(f); return this.insertSorted(st, tools(f), item(f), true)[1] ? 1 : 0; } };
+      }
+      case "erase": {
+        want(1); mutating();
+        const A = this.value(this.expr(args[0]), line);
+        if (isPtr(A.t) && sameType(A.t.to, elem)) {
+          return {
+            t: ptr(elem),
+            ev: (f) => {
+              const st = S(f);
+              const p = A.ev(f);
+              if (!p || p.store !== st || p.off >= st.cells.length) throw runtimeError(line, `${who}.erase()에 잘못된 위치를 넣었어요`, "end()는 지울 수 없어요. find로 찾은 위치가 end()가 아닌지 확인해 보세요.");
+              st.cells.splice(p.off, unit);
+              vecResized(st);
+              return new Ptr(st, p.off);
+            },
+          };
+        }
+        const K = this.conv(A, type.k === "map" ? type.key : elem, line, "erase의 키").ev;
+        return {
+          t: T.ulong,
+          ev: (f) => {
+            const st = S(f);
+            const i = tools(f).find(st, K(f));
+            if (i < 0) return 0n;
+            st.cells.splice(i * unit, unit);
+            vecResized(st);
+            return 1n;
+          },
+        };
+      }
+      default: break;
+    }
+    throw compileError(line, `${type.name}에는 ${name}() 함수가 없어요`,
+      `쓸 수 있는 것: ${k === "map" ? "[키], at, " : ""}insert, ${k === "map" ? "emplace, " : ""}find, count, contains, erase, size, empty, clear, begin, end`);
+  }
+
   // ---------- C++ 2단계: std::string, std::vector ----------
   /** 비어 있는(null) string/vector를 처음 쓸 때 만들어요 */
   freshObj(type) {
@@ -1584,6 +1925,7 @@ export class Compiler {
       }
       throw compileError(line, `${what}의 모양이 맞지 않아요`, "예: string s = \"안녕\"; string s(3, 'x');");
     }
+    if (type.k !== "vector") return this.containerValue(type, init, line, name);
     // vector
     const of = type.of;
     const unit = cells(of);
@@ -1598,6 +1940,11 @@ export class Compiler {
     if (args.length === 1 && args[0].k === "initlist") return fromList(args[0].items);
     const first = args.length <= 2 ? this.value(this.expr(args[0]), line) : null;
     if (args.length === 1 && first.t.k === "vector") return this.conv(first, type, line, what).ev;
+    if (args.length === 2 && isPtr(first.t)) {
+      // vector<int> v(a, a + n), vector<int> w(v.begin(), v.end())
+      const range = this.rangeCells(of, args, line, name);
+      return (f) => newVector(of, range(f).flat());
+    }
     if (first && isInt(first.t)) {
       // vector<int> v(5); vector<int> v(5, 1);
       const N = this.conv(first, T.long, line, what);
@@ -1654,6 +2001,7 @@ export class Compiler {
     const who = B.varName || (isStr ? "string" : "vector");
     const S = this.objRef(B, line);
     const args = node.args;
+    if (!isStr && type.k !== "vector") return this.containerMethod(B, name, node, S);
     const want = (min, max = min) => {
       if (args.length < min || args.length > max) {
         throw compileError(line, `${who}.${name}()에는 값 ${min === max ? min : `${min}~${max}`}개를 넣어요 (${args.length}개를 넣었어요)`);
@@ -1838,6 +2186,17 @@ export class Compiler {
       return i;
     };
     switch (name) {
+      case "push_front": case "pop_front": {
+        if (!B.t.deque) break;
+        mutating();
+        if (name === "pop_front") {
+          want(0);
+          return { t: T.void, ev: (f) => { const st = S(f); if (!vecLen(st)) throw runtimeError(line, `비어 있는 ${who}에서 pop_front()를 불렀어요`); st.cells.splice(0, unit); vecResized(st); } };
+        }
+        want(1);
+        const item = this.elemValue(elem, args[0], line, `${who}.push_front의 값`);
+        return { t: T.void, ev: (f) => { const st = S(f); st.cells.unshift(...item(f)); vecResized(st); } };
+      }
       case "insert": {
         want(2); mutating();
         const It = iter(0);
@@ -1957,7 +2316,7 @@ export class Compiler {
         throw compileError(line, `구조체(${typeName(t)})는 cout으로 바로 출력할 수 없어요`, `멤버를 하나씩 출력하거나, ostream &operator<<(ostream &os, const ${typeName(t)} &p) { … return os; } 를 만들어요.`);
       }
       if (t.k === "stream") throw compileError(line, `${name} << 뒤에 스트림이 또 왔어요`, "예: cout << a << b;");
-      if (t.k === "vector") throw compileError(line, "vector는 cout으로 한 번에 출력할 수 없어요", "for (int x : v) cout << x << ' '; 처럼 하나씩 출력해요.");
+      if (isObj(t) && t.k !== "string") throw compileError(line, `${t.name}는 cout으로 한 번에 출력할 수 없어요`, "for (auto &x : v) cout << x << ' '; 처럼 하나씩 출력해요.");
       if (!isArith(t) && !isPtr(t) && t.k !== "manip" && t.k !== "string") throw compileError(line, `${friendlyType(t)}는 cout으로 출력할 수 없어요`);
       const lev = L.ev;
       const rev = R.ev;
@@ -1977,7 +2336,7 @@ export class Compiler {
       if (U) return U;
       throw compileError(line, `구조체(${typeName(t)})는 cin으로 바로 읽을 수 없어요`, `멤버를 하나씩 읽거나(cin >> p.x >> p.y;), istream &operator>>(istream &is, ${typeName(t)} &p) 를 만들어요.`);
     }
-    if (t.k === "vector") throw compileError(line, "vector 전체는 cin으로 한 번에 읽을 수 없어요", "for 문으로 cin >> v[i]; 처럼 한 칸씩 읽거나, 읽은 값을 push_back 해요.");
+    if (isObj(t) && t.k !== "string") throw compileError(line, `${t.name} 전체는 cin으로 한 번에 읽을 수 없어요`, "for 문으로 cin >> v[i]; 처럼 한 칸씩 읽거나, 읽은 값을 push_back 해요.");
     if (t.k === "string") {
       const lev0 = L.ev;
       const target0 = R.lv;
@@ -2111,10 +2470,25 @@ export class Compiler {
       return STRING_T;
     }
     if (t.k === "vector") {
-      this.needHeader("vector", "vector", t.line ?? opts.line);
+      this.needHeader(t.deque ? "deque" : "vector", t.deque ? "deque" : "vector", t.line ?? opts.line);
       const of = this.need(this.resolveType(t.of, { line: t.line ?? opts.line }), t.line ?? opts.line);
       if (of.k === "ref" || isVoid(of) || isFunc(of) || isArr(of)) throw compileError(t.line ?? opts.line, `vector<${typeName(of)}>는 만들 수 없어요`);
-      return vectorOf(of);
+      return vectorOf(of, Boolean(t.deque));
+    }
+    if (t.k === "map" && !t.of) {
+      const l = t.line ?? opts.line;
+      this.needHeader(t.unordered ? "unordered_map" : "map", t.unordered ? "unordered_map" : "map", l);
+      const key = this.need(this.resolveType(t.key, { line: l }), l);
+      const val = this.need(this.resolveType(t.val, { line: l }), l);
+      return mapOf(key, val, this.pairOf(key, val), Boolean(t.unordered));
+    }
+    if ((t.k === "set" || t.k === "stack" || t.k === "queue" || t.k === "pq") && !t.name) {
+      const l = t.line ?? opts.line;
+      const header = { set: t.unordered ? "unordered_set" : "set", stack: "stack", queue: "queue", pq: "queue" }[t.k];
+      this.needHeader(header, header, l);
+      const of = this.need(this.resolveType(t.of, { line: l }), l);
+      if (of.k === "ref" || isVoid(of) || isArr(of)) throw compileError(l, `${header}<${typeName(of)}>는 만들 수 없어요`);
+      return t.k === "set" ? setOf(of, Boolean(t.unordered)) : adaptorOf(t.k, of, Boolean(t.greater));
     }
     if (t.k === "auto") {
       throw compileError(opts.line ?? t.line, "auto는 처음 값이 있는 변수에만 쓸 수 있어요", "예: auto x = 3.5;");
@@ -2952,6 +3326,8 @@ export class Compiler {
     const { line } = node;
     const rt = this.rt;
     let B = this.expr(node.e);
+    if (this.cpp && B.t.k === "map") return this.mapLookup(B, node.i, line, true);
+    if (this.cpp && isObj(B.t) && B.t.k !== "string" && B.t.k !== "vector") throw compileError(line, `${B.t.name}에는 [ ]를 쓸 수 없어요`);
     if (this.cpp && isObj(B.t)) return this.objIndex(B, node.i, line, false);
     if (this.cpp && isStruct(B.t)) {
       const Ix = this.expr(node.i);
@@ -4059,6 +4435,28 @@ export class Compiler {
       case "staticassert": this.staticAssert(node); return () => NORMAL;
       case "using": this.usingDecl(node); return () => NORMAL;
       case "rangefor": return this.rangeFor(node);
+      case "bind": {
+        // auto [a, b] = p;
+        const E = this.expr(node.e);
+        const n = cells(E.t);
+        const t = E.t;
+        let holder = null;
+        const lv = E.lv && node.bind.ref ? E.lv : null;
+        const tmp = this.value(E, line);
+        const binder = this.bindNames(node.bind, t, () => holder, line, Boolean(E.isConst));
+        return (f) => {
+          rt.line = line;
+          if (lv) holder = lv(f);
+          else {
+            const st = new Store(n, "나눠 받은 값", t);
+            const v = tmp.ev(f);
+            st.cells = isStruct(t) ? cloneCells(t, v) : [v];
+            holder = new Ptr(st, 0);
+          }
+          binder(f);
+          return NORMAL;
+        };
+      }
       case "expr": {
         if (node.e.k === "call") node.e.unused = true;
         const E = this.expr(node.e);

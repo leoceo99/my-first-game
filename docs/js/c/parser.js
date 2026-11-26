@@ -13,6 +13,9 @@ export const KEYWORDS = new Set([
   "_Static_assert", "_Alignof", "alignof", "_Alignas", "_Generic", "__attribute__",
 ]);
 
+const STD_TYPE_NAMES = new Set(["string", "vector", "ostream", "istream", "pair", "map", "unordered_map", "set", "unordered_set",
+  "stack", "queue", "priority_queue", "deque"]);
+
 const BINARY = {
   "||": 1, "&&": 2, "|": 3, "^": 4, "&": 5, "==": 6, "!=": 6,
   "<": 7, ">": 7, "<=": 7, ">=": 7, "<<": 8, ">>": 8, "+": 9, "-": 9, "*": 10, "/": 10, "%": 10,
@@ -116,7 +119,7 @@ class Parser {
   stdTypeName(tok = this.cur) {
     if (!this.cpp || tok.k !== "id") return null;
     const base = tok.v.startsWith("std::") ? tok.v.slice(5) : (this.usingStd || this.usingNames.has(tok.v)) ? tok.v : null;
-    return ["string", "vector", "ostream", "istream", "pair"].includes(base) ? base : null;
+    return STD_TYPE_NAMES.has(base) ? base : null;
   }
 
   /** string / vector<타입> */
@@ -125,6 +128,35 @@ class Parser {
     const kind = this.stdTypeName(tok);
     if (kind === "string") return { k: "string", line: tok.line };
     if (kind === "ostream" || kind === "istream") return { k: "streamtype", dir: kind === "ostream" ? "out" : "in", line: tok.line };
+    if (kind === "map" || kind === "unordered_map") {
+      this.expect("<", `예: ${kind}<string, int> m;`);
+      const key = this.typeName();
+      this.expect(",", `${kind}<키 타입, 값 타입> 처럼 타입 두 개를 넣어요`);
+      const val = this.typeName();
+      this.closeAngle();
+      return { k: "map", key, val, unordered: kind === "unordered_map", line: tok.line };
+    }
+    if (["set", "unordered_set", "stack", "queue", "deque", "priority_queue"].includes(kind)) {
+      this.expect("<", `예: ${kind}<int> s;`);
+      const of = this.typeName();
+      let greater = false;
+      if (this.accept(",")) {
+        this.typeName(); // 속에 쓰는 컨테이너 (vector<int>)
+        if (this.accept(",")) {
+          // 비교: greater<int> / less<int>
+          const cmp = this.next();
+          const base = cmp.v.startsWith("std::") ? cmp.v.slice(5) : cmp.v;
+          if (base !== "greater" && base !== "less") throw compileError(cmp.line, "priority_queue의 세 번째 자리에는 greater<타입> 이나 less<타입> 을 써요");
+          this.expect("<");
+          this.typeName();
+          this.closeAngle();
+          greater = base === "greater";
+        }
+      }
+      this.closeAngle();
+      const k = kind === "unordered_set" ? "set" : kind === "priority_queue" ? "pq" : kind === "deque" ? "vector" : kind;
+      return { k, of, unordered: kind === "unordered_set", deque: kind === "deque", greater, line: tok.line };
+    }
     if (kind === "pair") {
       this.expect("<", "예: pair<int, string> p;");
       const a = this.typeName();
@@ -830,7 +862,30 @@ class Parser {
       throw compileError(specs.line, "함수 안에서는 멤버 함수가 있는 클래스를 만들 수 없어요", "클래스는 main 위쪽(함수 밖)에 만들어 주세요.");
     }
     if (this.accept(";")) return { k: "decl", items: [], enums: specs.enums, line: specs.line };
+    if (this.cpp && (this.is("[") || ((this.is("&") || this.is("&&")) && this.is("[", this.peek())))) {
+      // auto [a, b] = p;
+      const bind = this.bindingNames(specs);
+      this.expect("=", "auto [a, b] = 값; 처럼 써요");
+      const e = this.assignment();
+      this.expect(";");
+      return { k: "bind", bind, e, line: specs.line };
+    }
     return this.declRest(specs, this.declarator(specs.type, false, specs.isConst));
+  }
+
+  /** 구조화된 바인딩 [a, b] (auto 뒤) */
+  bindingNames(specs) {
+    if (specs.type.k !== "auto") throw compileError(specs.line, "[a, b] 로 나눠 받을 때는 auto를 써요", "예: auto [이름, 점수] = p;");
+    const ref = Boolean(this.accept("&") || this.accept("&&"));
+    this.expect("[");
+    const names = [];
+    do {
+      const t = this.next();
+      if (t.k !== "id") throw compileError(t.line, "[ ] 안에는 이름을 써요");
+      names.push(t.v);
+    } while (this.accept(","));
+    this.expect("]");
+    return { names, ref, isConst: specs.isConst };
   }
 
   initializer() {
@@ -917,10 +972,18 @@ class Parser {
           let init = null;
           if (this.isTypeStart()) {
             const specs = this.declSpecs();
+            if (this.cpp && (this.is("[") || ((this.is("&") || this.is("&&")) && this.is("[", this.peek())))) {
+              // for (auto &[키, 값] : m)
+              const bind = this.bindingNames(specs);
+              this.expect(":", "for (auto &[키, 값] : m) 처럼 써요");
+              const range = this.expression();
+              this.expect(")");
+              return { k: "rangefor", decl: { bind, name: null, type: specs.type, line }, range, body: this.statement(), line };
+            }
             const d = this.declarator(specs.type, false, specs.isConst);
             if (this.cpp && this.accept(":")) {
               // 범위 기반 for: for (int x : 배열)
-              const range = this.expression();
+              const range = this.is("{") ? this.initializer() : this.expression();
               this.expect(")");
               return { k: "rangefor", decl: { ...d, storage: specs.storage }, range, body: this.statement(), line };
             }

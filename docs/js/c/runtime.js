@@ -331,11 +331,17 @@ export class Runtime {
     if (v instanceof FnRef) return `→ 함수 ${v.fi.name}`;
     if (type.k === "stream") return v && v.name ? v.name.replace("std", "") : "스트림";
     if (type.k === "string") return JSON.stringify(new TextDecoder().decode(Uint8Array.from(strBytes(v))));
-    if (type.k === "vector") {
+    if (isObj(type)) {
       const n = vecLen(v);
       const parts = [];
-      for (let i = 0; i < Math.min(n, 20); i++) parts.push(this.formatValue(type.of, v, i * v.unit));
-      return `{${parts.join(", ")}${n > 20 ? ", …" : ""}} (${n}개)`;
+      for (let i = 0; i < Math.min(n, 20); i++) {
+        if (type.k === "map") {
+          const [kf, vf] = type.of.fields;
+          parts.push(`${this.formatValue(kf.type, v, i * v.unit + kf.off)}: ${this.formatValue(vf.type, v, i * v.unit + vf.off)}`);
+        } else parts.push(this.formatValue(type.of, v, i * v.unit));
+      }
+      const order = type.k === "stack" ? " (마지막이 top)" : type.k === "pq" ? " (마지막이 top)" : type.k === "queue" ? " (처음이 front)" : "";
+      return `{${parts.join(", ")}${n > 20 ? ", …" : ""}} (${n}개)${order}`;
     }
     if (type.k === "ref") return v instanceof Ptr ? `→ ${this.formatValue(type.to, v.store, v.off)} (참조)` : "?";
     if (type.k === "jmpbuf") return v && v.jmp ? "(돌아올 자리 저장됨)" : "?";
@@ -1724,7 +1730,8 @@ export function cloneValue(type, v) {
     st.isString = true;
     return st;
   }
-  if (type.k === "vector") {
+  if (isObj(type)) {
+    // vector, map, set, stack, queue, priority_queue: 원소 칸들을 통째로 복사해요
     return newVector(type.of, cloneCells(arr(type.of, v.cells.length / v.unit), v.cells));
   }
   return v;

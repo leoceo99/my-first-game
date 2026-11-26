@@ -4,7 +4,7 @@
  */
 "use strict";
 
-const CACHE = "pybridge-v8";
+const CACHE = "pybridge-v9";
 const APP_FILES = [
   "./", "./index.html", "./style.css", "./worker.js", "./py/runner.py",
   "./js/app.js", "./js/editor.js", "./js/engine.js", "./js/store.js",

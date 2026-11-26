@@ -76,7 +76,8 @@ C++은 C 실행기 위에 쌓아요. 순서는 [`cpp-plan.md`](cpp-plan.md)에 �
 | 2 | 참조, 오버로딩, 기본 인자, `new`/`delete`, `auto`, `constexpr`, 캐스트, 범위 기반 `for`, 이름공간, `std::string`, `std::vector`, `getline`, `to_string`/`stoi` | ✅ |
 | 3 | 클래스: 멤버 함수, `this`, 생성자(초기화 목록), 소멸자, `public`/`private`, `const` 멤버 함수, `static` 멤버, 클래스 밖 정의 | ✅ |
 | 4 | 연산자 오버로딩(`+` `==` `<` `[]` `()` `++` `=`), `cout << 객체`, `cin >> 객체`, `friend`, 복사 생성자 | ✅ |
-| 5–6 | 템플릿과 STL, 상속·가상 함수·예외 | ❌ 준비 중 (단계 안내) |
+| 5 | 템플릿(함수, 클래스), 람다, `sort`·`find`·`accumulate` 같은 알고리즘, `pair`, `map`, `set`, `stack`, `queue`, `priority_queue`, `deque`, 구조화 바인딩 | ✅ |
+| 6 | 상속·가상 함수·예외 | ❌ 준비 중 (단계 안내) |
 
 ### 진짜 C와 다른 점
 

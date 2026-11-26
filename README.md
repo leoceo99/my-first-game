@@ -51,8 +51,9 @@ C 실행기 위에 C++을 단계별로 쌓고 있어요. **새 C++ 코드** 버�
 - 라이브러리: **`std::string`**(`+`, `substr`, `find` …), **`std::vector`**(`push_back`, `vector<vector<int>>` …), `to_string`, `stoi`
 - **클래스**: 멤버 함수, 생성자(초기화 목록), 소멸자, `public`/`private`, `const` 멤버 함수, `static` 멤버
 - **연산자 오버로딩**: `a + b`, `a == b`, `cout << 객체`, `friend`, 복사 생성자
+- **템플릿과 STL**: 함수·클래스 템플릿, 람다, `sort`·`find`·`accumulate`, `pair`, `map`, `set`, `stack`, `queue`, `priority_queue`
 
-템플릿, 상속, 예외 같은 나머지는 [`design/cpp-plan.md`](design/cpp-plan.md)의 순서대로 만들어요.
+상속, 가상 함수, 예외는 [`design/cpp-plan.md`](design/cpp-plan.md)의 순서대로 만들어요.
 
 ### 이 앱만의 특징
 

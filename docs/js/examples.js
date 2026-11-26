@@ -537,4 +537,42 @@ int main() {
 }
 `,
   },
+  {
+    lang: "cpp",
+    name: "C++ 단어 세기",
+    about: "map, vector, sort와 람다, 구조화 바인딩",
+    code: `#include <iostream>
+#include <string>
+#include <vector>
+#include <map>
+#include <algorithm>
+using namespace std;
+
+int main() {
+    cout << "문장을 입력하고, 다 쓰면 [입력 끝]을 누르세요." << endl;
+
+    map<string, int> count;   // 단어 → 나온 횟수 (단어 순서로 정렬돼요)
+    string word;
+    while (cin >> word) {
+        count[word]++;
+    }
+
+    cout << "--- 가나다순 ---" << endl;
+    for (const auto &[w, n] : count) {
+        cout << w << ": " << n << endl;
+    }
+
+    // 많이 나온 순서로 정렬하기
+    vector<pair<string, int>> items(count.begin(), count.end());
+    sort(items.begin(), items.end(), [](const pair<string, int> &a, const pair<string, int> &b) {
+        return a.second > b.second;
+    });
+
+    if (!items.empty()) {
+        cout << "가장 많이 나온 단어: " << items[0].first << " (" << items[0].second << "번)" << endl;
+    }
+    return 0;
+}
+`,
+  },
 ];

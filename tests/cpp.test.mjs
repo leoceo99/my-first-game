@@ -72,10 +72,9 @@ test("C++ 모드: void*를 그냥 넣으면 C++ 규칙대로 알려요", () => {
 
 test("C++ 모드: 아직 없는 기능은 단계와 함께 안내해요", () => {
   const cases = [
-    ["#include <map>\nint main() {}", /<map>.*다음 단계/],
-    ["#include <iostream>\nusing namespace std;\nint main() { map<int, int> m; }", /std::map.*5단계/],
+    ["#include <sstream>\nint main() {}", /<sstream>.*다음 단계/],
     ["struct A { virtual void f() {} };\nint main() {}", /'virtual'.*6단계/],
-    ["#include <iostream>\nint main() { std::map<int, int> m; }", /std::map.*5단계/],
+    ["#include <iostream>\nint main() { std::tuple<int, int> t; }", /std::tuple/],
     ["int main() { try { } catch (int e) { } }", /'try'.*6단계/],
   ];
   for (const [code, pattern] of cases) {
@@ -372,6 +371,43 @@ const STAGE5A = [
   ["템플릿 목표", "#include <iostream>\n#include <vector>\n#include <algorithm>\ntemplate <typename T> T biggest(T a, T b) { return a > b ? a : b; }\nint main() {\n    std::vector<int> v = {3, 1, 2};\n    std::sort(v.begin(), v.end());\n    std::cout << v[0] << v[1] << v[2] << \" \" << biggest(2.5, 1.5) << \"\\n\";\n}", "123 2.5\n"],
 ];
 for (const [name, code, want, inputs] of STAGE5A) {
+  test(`C++ 5단계: ${name}`, () => {
+    const r = run(code, inputs);
+    if (want === "ERR") assert.equal(r.status, "error", r.out);
+    else ok(code, want, inputs);
+  });
+}
+
+
+// ---------- 5단계 (뒷부분): map, set, stack, queue, priority_queue, deque ----------
+const H5B = "#include <iostream>\n#include <string>\n#include <vector>\n#include <map>\n#include <set>\n#include <stack>\n#include <queue>\n#include <unordered_map>\n#include <algorithm>\nusing namespace std;\n";
+const STAGE5B = [
+  ["map 기본", H5B + "int main() { map<string, int> age; age[\"민지\"] = 15; age[\"철수\"] = 17; age[\"민지\"] += 1; cout << age[\"민지\"] << age.size() << age.count(\"영희\") << age.size() << endl; }", "1620 2\n".replace(" ", "")],
+  ["map 순서대로 돌기", H5B + "int main() { map<string, int> m = {{\"b\", 2}, {\"a\", 1}, {\"c\", 3}}; for (auto &p : m) cout << p.first << p.second << \" \"; cout << endl; }", "a1 b2 c3 \n"],
+  ["map 구조화 바인딩", H5B + "int main() { map<int, string> m; m[3] = \"셋\"; m[1] = \"하나\"; for (auto &[k, v] : m) cout << k << v << \" \"; for (auto &[k, v] : m) v += \"!\"; cout << m[1] << endl; }", "1하나 3셋 하나!\n"],
+  ["map 단어 세기", H5B + "int main() { map<string, int> cnt; string w; while (cin >> w) cnt[w]++; for (const auto &p : cnt) cout << p.first << \":\" << p.second << \" \"; cout << endl; }", "a:2 b:1 \n", ["a b a", null]],
+  ["map find, erase, at", H5B + "int main() { map<string, int> m = {{\"x\", 1}, {\"y\", 2}}; auto it = m.find(\"y\"); if (it != m.end()) cout << it->first << it->second; cout << (m.find(\"z\") == m.end()); m.erase(\"x\"); cout << m.size() << m.at(\"y\") << m.contains(\"y\") << endl; }", "y21121\n"],
+  ["map at 없는 키", H5B + "int main() { map<string, int> m; cout << m.at(\"없음\"); }", "ERR"],
+  ["map insert, emplace", H5B + "int main() { map<int, int> m; m.insert({1, 10}); m.insert(make_pair(2, 20)); m.emplace(3, 30); m.insert({1, 99}); cout << m[1] << m.size() << endl; }", "103\n"],
+  ["unordered_map", H5B + "int main() { unordered_map<string, int> m; m[\"k\"] = 5; cout << m[\"k\"] << m.count(\"k\") << endl; }", "51\n"],
+  ["map<string, vector<int>>", H5B + "int main() { map<string, vector<int>> g; g[\"a\"].push_back(1); g[\"a\"].push_back(2); g[\"b\"]; cout << g[\"a\"].size() << g[\"b\"].size() << g.size() << endl; }", "202\n"],
+  ["set", H5B + "int main() { set<int> s = {3, 1, 3, 2}; s.insert(5); s.insert(1); cout << s.size(); for (int x : s) cout << x; cout << s.count(2) << s.count(9); s.erase(3); cout << s.size() << endl; }", "41235103\n"],
+  ["set<string> 중복 제거", H5B + "int main() { vector<string> w = {\"b\", \"a\", \"b\"}; set<string> s(w.begin(), w.end()); for (auto &x : s) cout << x; cout << endl; }", "ab\n"],
+  ["stack", H5B + "int main() { stack<int> s; s.push(1); s.push(2); s.push(3); cout << s.top() << s.size(); s.pop(); cout << s.top(); while (!s.empty()) s.pop(); cout << s.empty() << endl; }", "3321\n"],
+  ["queue", H5B + "int main() { queue<string> q; q.push(\"a\"); q.push(\"b\"); cout << q.front() << q.back(); q.pop(); cout << q.front() << q.size() << endl; }", "abb1\n"],
+  ["priority_queue", H5B + "int main() { priority_queue<int> pq; for (int x : {3, 9, 1, 5}) pq.push(x); while (!pq.empty()) { cout << pq.top(); pq.pop(); } cout << endl; }", "9531\n"],
+  ["priority_queue greater", H5B + "int main() { priority_queue<int, vector<int>, greater<int>> pq; pq.push(4); pq.push(1); pq.push(7); cout << pq.top(); pq.pop(); cout << pq.top() << endl; }", "14\n"],
+  ["priority_queue pair (다익스트라 모양)", H5B + "int main() { priority_queue<pair<int, int>, vector<pair<int, int>>, greater<pair<int, int>>> pq; pq.push({5, 1}); pq.push({2, 9}); pq.push({2, 3}); auto [d, v] = pq.top(); cout << d << v << endl; }", "23\n"],
+  ["빈 stack top", H5B + "int main() { stack<int> s; cout << s.top(); }", "ERR"],
+  ["deque", H5B + "#include <deque>\nint main() { deque<int> d; d.push_back(2); d.push_front(1); d.push_back(3); d.pop_front(); cout << d[0] << d.back() << d.size() << endl; }", "232\n"],
+  ["auto [a, b] = pair", H5B + "int main() { pair<string, int> p = {\"점수\", 90}; auto [name, score] = p; score += 1; cout << name << score << p.second << endl; }", "점수9190\n"],
+  ["stack 함수로 넘기기", H5B + "int sum(stack<int> s) { int t = 0; while (!s.empty()) { t += s.top(); s.pop(); } return t; }\nint main() { stack<int> s; s.push(1); s.push(2); cout << sum(s) << s.size() << endl; }", "32\n"],
+  ["BFS 모양", H5B + "int main() { vector<vector<int>> g = {{1, 2}, {3}, {3}, {}}; vector<int> dist(4, -1); queue<int> q; q.push(0); dist[0] = 0; while (!q.empty()) { int u = q.front(); q.pop(); for (int v : g[u]) if (dist[v] < 0) { dist[v] = dist[u] + 1; q.push(v); } } for (int d : dist) cout << d; cout << endl; }", "0112\n"],
+  ["map 헤더 없음", "#include <iostream>\nusing namespace std;\nint main() { map<int, int> m; }", "ERR"],
+  ["for로 stack 돌기 안내", H5B + "int main() { stack<int> s; for (int x : s) {} }", "ERR"],
+  ["vector 범위로 만들기, { } 돌기", H5B + "int main() { int a[] = {3, 1, 2}; vector<int> v(a, a + 3); vector<double> w(v.begin(), v.end()); int s = 0; for (int x : {1, 2, 3}) s += x; cout << v.size() << w[0] / 2 << s << endl; }", "31.56\n"],
+];
+for (const [name, code, want, inputs] of STAGE5B) {
   test(`C++ 5단계: ${name}`, () => {
     const r = run(code, inputs);
     if (want === "ERR") assert.equal(r.status, "error", r.out);

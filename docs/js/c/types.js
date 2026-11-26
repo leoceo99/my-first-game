@@ -54,8 +54,14 @@ export const isStruct = (t) => t.k === "struct";
 // ---------- C++ std::string, std::vector ----------
 /** 값 하나가 '물건'(Store)인 C++ 타입: 복사할 때 통째로 새로 만들어요 */
 export const STRING_T = { k: "string", name: "string", size: 32, align: 8 };
-export const vectorOf = (of) => ({ k: "vector", of, name: "vector", size: 24, align: 8 });
-export const isObj = (t) => t.k === "string" || t.k === "vector";
+export const vectorOf = (of, deque = false) => ({ k: "vector", of, name: deque ? "deque" : "vector", deque, size: 24, align: 8 });
+/** map<K, V>: 원소(of)는 pair<K, V>, 키 순서로 정렬해 둬요 */
+export const mapOf = (key, val, of, unordered) => ({ k: "map", key, val, of, unordered, name: unordered ? "unordered_map" : "map", size: 48, align: 8 });
+export const setOf = (of, unordered) => ({ k: "set", of, unordered, name: unordered ? "unordered_set" : "set", size: 48, align: 8 });
+/** stack, queue, priority_queue(k "pq") */
+export const adaptorOf = (k, of, greater = false) => ({ k, of, greater, name: { stack: "stack", queue: "queue", pq: "priority_queue" }[k], size: 80, align: 8 });
+const OBJ_KINDS = new Set(["string", "vector", "map", "set", "stack", "queue", "pq"]);
+export const isObj = (t) => OBJ_KINDS.has(t.k);
 
 /** 이 타입 안에 string/vector가 들어 있나요? (복사할 때 깊게 복사해야 해요) */
 export function hasObj(t) {
@@ -130,6 +136,9 @@ export function sameType(a, b) {
   if (a.k === "string") return true;
   if (a.k === "lambda") return a.node === b.node; // 같은 자리의 람다
   if (a.k === "vector") return sameType(a.of, b.of);
+  if (a.k === "map") return sameType(a.key, b.key) && sameType(a.val, b.val) && Boolean(a.unordered) === Boolean(b.unordered);
+  if (a.k === "set" || a.k === "stack" || a.k === "queue") return sameType(a.of, b.of) && Boolean(a.unordered) === Boolean(b.unordered);
+  if (a.k === "pq") return sameType(a.of, b.of) && a.greater === b.greater;
   if (a.k === "array") {
     // 크기가 실행 중에 정해지는 배열(VLA)은 어떤 크기와도 맞다고 봐요
     const flexible = a.vla || b.vla || a.anyLen || b.anyLen;
@@ -153,7 +162,10 @@ export function typeName(t) {
     }
     case "func": return `${typeName(t.ret)} (${t.params.map((p) => typeName(p.type)).join(", ")})`;
     case "ref": return `${t.toConst ? "const " : ""}${typeName(t.to)} &`;
-    case "vector": return `vector<${typeName(t.of)}>`;
+    case "vector": return `${t.name}<${typeName(t.of)}>`;
+    case "map": return `${t.name}<${typeName(t.key)}, ${typeName(t.val)}>`;
+    case "set": case "stack": case "queue": return `${t.name}<${typeName(t.of)}>`;
+    case "pq": return `priority_queue<${typeName(t.of)}${t.greater ? `, vector<${typeName(t.of)}>, greater<${typeName(t.of)}>` : ""}>`;
     case "struct": return t.alias || `${t.isUnion ? "union" : "struct"} ${t.tag || "(이름 없음)"}`;
     default: return t.name;
   }
@@ -167,7 +179,7 @@ export function friendlyType(t) {
   if (isPtr(t)) return isCharLike(t.to) ? "문자열(char *)" : `주소(${typeName(t)})`;
   if (isStruct(t)) return `구조체(${typeName(t)})`;
   if (t.k === "string") return "문자열(string)";
-  if (t.k === "vector") return `${typeName(t)}`;
+  if (isObj(t)) return `${typeName(t)}`;
   if (isArr(t)) return `배열(${typeName(t)})`;
   return t.name;
 }
