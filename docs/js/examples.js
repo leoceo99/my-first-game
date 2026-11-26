@@ -491,4 +491,50 @@ int main() {
 }
 `,
   },
+  {
+    lang: "cpp",
+    name: "C++ 분수 계산기",
+    about: "연산자 오버로딩: +, *, ==, cout << 분수",
+    code: `#include <iostream>
+using namespace std;
+
+int gcd(int a, int b) { return b == 0 ? a : gcd(b, a % b); }
+
+class Fraction {
+    int num, den;   // 분자, 분모
+
+public:
+    Fraction(int n = 0, int d = 1) : num(n), den(d) {
+        int g = gcd(num < 0 ? -num : num, den);
+        num /= g;
+        den /= g;
+    }
+
+    // 분수끼리 + 와 * 를 쓸 수 있게 해요
+    Fraction operator+(const Fraction &o) const { return Fraction(num * o.den + o.num * den, den * o.den); }
+    Fraction operator*(const Fraction &o) const { return Fraction(num * o.num, den * o.den); }
+    bool operator==(const Fraction &o) const { return num == o.num && den == o.den; }
+
+    // cout << 분수 로 출력할 수 있게 해요 (friend라서 private 멤버를 써요)
+    friend ostream &operator<<(ostream &os, const Fraction &f) {
+        if (f.den == 1) return os << f.num;
+        return os << f.num << "/" << f.den;
+    }
+};
+
+int main() {
+    Fraction half(1, 2), third(1, 3);
+    cout << half << " + " << third << " = " << half + third << endl;
+    cout << half << " x " << third << " = " << half * third << endl;
+    cout << "2/4 == 1/2 ? " << (Fraction(2, 4) == half ? "네" : "아니요") << endl;
+
+    int a, b;
+    cout << "분자와 분모를 입력하세요: ";
+    cin >> a >> b;
+    Fraction mine(a, b);
+    cout << "약분하면 " << mine << ", 두 배는 " << mine + mine << endl;
+    return 0;
+}
+`,
+  },
 ];

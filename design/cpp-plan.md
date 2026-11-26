@@ -46,7 +46,12 @@ C++ 코드의 대부분은 C 문법이라서, 단단한 C 실행기가 가장 �
    `A::~A()`), 객체 배열, `vector<클래스>`, 멤버 객체, 이름공간 안의 클래스, `Counter(5)` 같은 이름 없는 객체.
    아직 아닌 것: 사용자 복사 생성자·복사 대입(지금은 멤버를 그대로 복사해요), 이름 없는 임시 객체의 소멸자, `friend`(4단계).
    만든 곳: `js/c/parser.js`의 `classBody`, `js/c/compile.js`의 `registerClasses`/`classInit`/`methodCall`/`ctorPrologue`/`destroyFn`.
-4. **연산자 오버로딩**: `operator+`, `operator==`, `operator<<`(cout으로 출력)
+4. ✅ **연산자 오버로딩** (끝남): 멤버 연산자와 일반 함수 연산자(`+ - * / % == != < > <= >= += -= …`), 단항 `- ! ~`,
+   `++`/`--`(앞: `operator++()`, 뒤: `operator++(int)`), `operator[]`, `operator()`, `operator=`(복사 대입),
+   `cout << 객체`(`ostream &operator<<(ostream &os, const T &x)`), `cin >> 객체`, `friend` 함수(클래스 안이나 밖에서 정의),
+   `ostream&`/`istream&` 타입, `return {a, b};`, 직접 만든 복사 생성자(`T b = a;`, `T c(a);`, 값으로 넘기기).
+   맞는 연산자가 없으면 만들 함수의 모양까지 알려 줘요.
+   만든 곳: `js/c/compile.js`의 `userOp`/`invokeMember`/`noOpError`, `js/c/parser.js`의 `operatorName`.
 5. **템플릿**: 함수 템플릿과 클래스 템플릿을 쓰는 타입마다 다시 컴파일(인스턴스화)해요.
    `std::vector<T>`, `std::pair`, `std::map`, `std::sort` 같은 STL을 이 위에 만들어요.
 6. **상속과 가상 함수, 예외**: `virtual`(객체마다 함수 표), `try`/`catch`/`throw`(JS 예외로 전달)

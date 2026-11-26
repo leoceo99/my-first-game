@@ -33,7 +33,7 @@ const STD_TYPES = new Set(["map", "set", "pair", "unordered_map", "unordered_set
 
 // 아직 준비 중인 C++ 낱말들과 그 단계
 export const CPP_PENDING = {
-  virtual: 6, friend: 4, operator: 4,
+  virtual: 6,
   template: 5, typename: 5, try: 6, catch: 6, throw: 6, decltype: 5, dynamic_cast: 6,
 };
 

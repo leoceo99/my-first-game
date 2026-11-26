@@ -115,7 +115,7 @@ class Parser {
   stdTypeName(tok = this.cur) {
     if (!this.cpp || tok.k !== "id") return null;
     const base = tok.v.startsWith("std::") ? tok.v.slice(5) : (this.usingStd || this.usingNames.has(tok.v)) ? tok.v : null;
-    return base === "string" || base === "vector" ? base : null;
+    return ["string", "vector", "ostream", "istream"].includes(base) ? base : null;
   }
 
   /** string / vector<타입> */
@@ -123,6 +123,7 @@ class Parser {
     const tok = this.next();
     const kind = this.stdTypeName(tok);
     if (kind === "string") return { k: "string", line: tok.line };
+    if (kind === "ostream" || kind === "istream") return { k: "streamtype", dir: kind === "ostream" ? "out" : "in", line: tok.line };
     this.expect("<", "예: vector<int> v;");
     const of = this.typeName();
     this.closeAngle();
@@ -254,6 +255,7 @@ class Parser {
     const methods = [];
     const statics = [];
     const enums = [];
+    const friends = [];
     t.isClass = kw.v === "class";
     t.qname = tag ? this.nsName(tag) : null;
     const qualifiers = () => {
@@ -289,6 +291,19 @@ class Parser {
         continue;
       }
       if (this.accept(";")) continue;
+      if (this.accept("friend")) {
+        // friend 함수: 클래스 밖의 함수지만 private 멤버를 쓸 수 있어요
+        const fs = this.declSpecs();
+        if (!fs) throw compileError(line, "friend 뒤에는 함수 선언이 와요", "예: friend ostream &operator<<(ostream &os, const Point &p);");
+        if (this.accept(";")) continue; // friend class X;
+        const d = this.declarator(fs.type, false, fs.isConst);
+        if (d.type.k !== "func") throw compileError(line, "friend 뒤에는 함수가 와요");
+        const fr = { name: this.nsName(d.name), type: d.type, line: d.line, body: null };
+        if (this.is("{")) fr.body = this.block();
+        else this.expect(";");
+        friends.push(fr);
+        continue;
+      }
       while (this.is("explicit") || this.is("inline")) this.next();
       if (this.is("~")) {
         this.next();
@@ -347,10 +362,25 @@ class Parser {
     t.methods = methods;
     t.statics = statics;
     t.classEnums = enums;
+    t.friends = friends;
     t.complete = true;
     t.isCppClass = true;
     this.classes.push(t);
     return t;
+  }
+
+  /** operator+, operator<<, operator[], operator() … */
+  operatorName() {
+    const base = this.next();
+    if (this.accept("(")) { this.expect(")", "operator() 처럼 써요"); return `${base.v}()`; }
+    if (this.accept("[")) { this.expect("]", "operator[] 처럼 써요"); return `${base.v}[]`; }
+    const tok = this.next();
+    const ok = ["+", "-", "*", "/", "%", "==", "!=", "<", ">", "<=", ">=", "<<", ">>", "+=", "-=", "*=", "/=", "%=",
+      "++", "--", "!", "=", "&&", "||", "~", "&", "|", "^", "<<=", ">>=", "&=", "|=", "^="];
+    if (tok.k !== "op" || !ok.includes(tok.v)) {
+      throw compileError(tok.line, `operator 뒤의 '${show(tok)}'는 지원하지 않는 연산자예요`, "예: operator+, operator==, operator<<, operator[]");
+    }
+    return `${base.v}${tok.v}`;
   }
 
   /** 생성자의 초기화 목록: Counter() : count(0), name("x") { } */
@@ -509,6 +539,8 @@ class Parser {
       this.next();
       inner = this.declaratorParts(abstract);
       this.expect(")");
+    } else if (this.cpp && this.cur.k === "id" && (this.cur.v === "operator" || this.cur.v.endsWith("::operator"))) {
+      name = this.operatorName();
     } else if (this.cur.k === "id" && !KEYWORDS.has(this.cur.v) && !(abstract && this.isTypedefName(this.cur.v))) {
       name = this.next().v;
     } else if (!abstract) {
@@ -822,7 +854,7 @@ class Parser {
           return { k: "continue", line };
         case "return": {
           this.next();
-          const e = this.is(";") ? null : this.expression();
+          const e = this.is(";") ? null : this.cpp && this.is("{") ? this.initializer() : this.expression();
           this.expect(";");
           return { k: "return", e, line };
         }
@@ -915,7 +947,10 @@ class Parser {
         this.next();
         return { k: "unary", op: tok.v, e: this.unary(), line };
       }
-      if (tok.v === "(" && this.isTypeStart(this.peek())) {
+      const third = this.t[this.i + 2];
+      // C++: (Fraction(2, 4) == x) 의 Fraction(…)은 형 변환이 아니라 객체 만들기예요
+      const functional = this.cpp && this.isTypedefName(this.peek().v) && third && (this.is("(", third) || this.is("{", third));
+      if (tok.v === "(" && this.isTypeStart(this.peek()) && !functional) {
         this.next();
         const type = this.typeName();
         this.expect(")");
@@ -1037,7 +1072,7 @@ class Parser {
 
   primary() {
     const tok = this.cur;
-    if (this.cpp && this.stdTypeName(tok) !== null && !this.is("::", this.peek())) {
+    if (this.cpp && ["string", "vector"].includes(this.stdTypeName(tok)) && !this.is("::", this.peek())) {
       // string("abc"), vector<int>(3, 0), vector<int>{1, 2}
       const type = this.objType();
       if (this.is("{")) return { k: "construct", type, list: this.initializer(), line: tok.line };

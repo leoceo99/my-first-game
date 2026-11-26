@@ -7,7 +7,7 @@ import {
 } from "./types.js";
 import {
   BUILTINS, FILE_T, STDIN, STDOUT, STDERR, JumpSignal, parseFormat, retypeHeap,
-  MANIP, STD_STREAMS, MANIPULATORS, MANIP_MAKERS, streamPut, streamGet, streamGetChar, streamIgnore,
+  MANIP, STD_STREAMS, MANIPULATORS, MANIP_MAKERS, OSTREAM, ISTREAM, streamPut, streamGet, streamGetChar, streamIgnore,
   NPOS, newString, strBytes, strLen, setStr, newVector, vecLen, vecResized, cloneValue, cloneCells, strCompare,
   streamGetWord, streamGetLine, toStringBytes, parseNumber,
 } from "./runtime.js";
@@ -667,6 +667,7 @@ export class Compiler {
       cls.staticFns = new Set();
       cls.staticNames = new Set();
       cls.allFis = [];
+      cls.friendNames = new Set((cls.friends || []).map((fr) => fr.name));
       const ns = q && q.includes("::") ? q.slice(0, q.lastIndexOf("::")) : "";
       this.declareEnums(cls.classEnums);
       for (const m of cls.methods) {
@@ -717,6 +718,11 @@ export class Compiler {
         };
         fi.ref = new FnRef(fi);
         cls.ctors.push(fi);
+        cls.allFis.push(fi);
+      }
+      for (const fr of cls.friends || []) {
+        if (!fr.body) continue;
+        const fi = this.declareFunction({ name: fr.name, type: fr.type, line: fr.line, ns }, { type: fr.type, body: fr.body, line: fr.line, ns });
         cls.allFis.push(fi);
       }
       for (const sm of cls.statics) {
@@ -859,7 +865,7 @@ export class Compiler {
     const implicit = (cls.ctors || []).find((c) => c.implicit);
     if (init && init.k !== "initlist" && init.k !== "ctor") {
       const V = this.value(this.expr(init), line);
-      if (sameType(V.t, cls)) {
+      if (sameType(V.t, cls) && !this.copyCtor(cls)) {
         const ev = V.ev;
         return (f, p) => rt.storeStruct(p, ev(f), line);
       }
@@ -890,12 +896,17 @@ export class Compiler {
       return (f, p) => { this.invoke(implicit, [p], line, false); };
     }
     const pre = args.map((a) => (a.k === "initlist" ? { t: { k: "initlist" }, initlist: true } : this.expr(a)));
+    if (args.length === 1 && !pre[0].initlist && sameType(pre[0].t, cls) && !this.copyCtor(cls)) {
+      // T b(a): 복사 생성자를 만들지 않았으면 멤버를 그대로 복사해요
+      const ev = this.value(pre[0], line).ev;
+      return (f, p) => rt.storeStruct(p, ev(f), line);
+    }
     if (args.length === 0 && !user.some((c) => c.type.params.every((q) => q.dflt))) {
       throw compileError(line, `${typeName(cls)}에는 값 없이 부를 수 있는 기본 생성자 ${cls.tag}()가 없어요`,
         `${name ? `'${name}'를 만들 때 ` : ""}괄호 안에 값을 넣거나, 클래스에 ${cls.tag}() { } 를 만들어 주세요.`);
     }
     const fi = this.pickOverload(user, pre, { line, args }, `${cls.tag} 생성자`);
-    if (fi.access !== "public" && !(this.fn && this.fn.cls === cls)) {
+    if (fi.access !== "public" && !this.canAccess(cls)) {
       throw compileError(line, `${cls.tag}의 이 생성자는 ${fi.access}라서 클래스 밖에서 쓸 수 없어요`);
     }
     const stack = [];
@@ -934,7 +945,13 @@ export class Compiler {
     }
     const pre = node.args.map((a) => (a.k === "initlist" ? { t: { k: "initlist" }, initlist: true } : this.expr(a)));
     const fi = group.length > 1 ? this.pickOverload(group, pre, node, name) : group[0];
-    if (fi.access !== "public" && !(this.fn && this.fn.cls === cls)) {
+    return this.invokeMember(cls, fi, selfEv, isConstObj, pre, node, name);
+  }
+
+  /** 고른 멤버 함수를 객체(self)와 함께 불러요 */
+  invokeMember(cls, fi, selfEv, isConstObj, pre, node, name) {
+    const { line } = node;
+    if (fi.access !== "public" && !this.canAccess(cls)) {
       throw compileError(line, `'${name}'는 ${fi.access} 함수라 클래스 밖에서 부를 수 없어요`, "클래스 안에서 public: 아래로 옮기면 밖에서도 부를 수 있어요.");
     }
     if (isConstObj && !fi.isConstMethod) {
@@ -946,6 +963,59 @@ export class Compiler {
       if (self === null) throw runtimeError(line, `NULL 포인터로 멤버 함수 ${name}()를 불렀어요`, "객체를 가리키는지 먼저 확인해 주세요.");
       return this.invoke(target, [self, ...vals], line, used, types);
     }, fi, pre);
+  }
+
+  /** 지금 컴파일하는 함수가 cls의 private 멤버를 쓸 수 있나요? (같은 클래스의 멤버 함수, friend 함수) */
+  canAccess(cls) {
+    const fn = this.fn;
+    return Boolean(fn && (fn.cls === cls || (cls.friendNames && cls.friendNames.has(fn.name))));
+  }
+
+  /** 사용자가 만든 복사 생성자 T(const T &) */
+  copyCtor(cls) {
+    return (cls.ctors || []).find((c) => !c.implicit && c.type.params.length === 1 && c.type.params[0].type.k === "ref" && sameType(c.type.params[0].type.to, cls)) || null;
+  }
+
+  /** 오버로딩 고르기, 맞는 것이 없으면 null */
+  tryPick(group, args, line, name) {
+    try {
+      return this.pickOverload(group, args, { line, args }, name);
+    } catch (e) {
+      if (e instanceof CError) return null;
+      throw e;
+    }
+  }
+
+  /**
+   * 연산자 오버로딩: a + b, -a, ++a, a[i], a(x), cout << a …
+   * raws: 이미 컴파일한 피연산자들, nodes: 그 구문 트리 (기본 인자 계산용). 맞는 연산자 함수가 없으면 null
+   */
+  userOp(op, raws, nodes, line) {
+    const name = `operator${op}`;
+    const self = raws[0];
+    if (isStruct(self.t) && self.t.methodMap && self.t.methodMap.has(name)) {
+      const fi = this.tryPick(self.t.methodMap.get(name), raws.slice(1), line, name);
+      if (fi) return this.invokeMember(self.t, fi, this.selfOf(self, line), Boolean(self.isConst), raws.slice(1), { line, args: nodes.slice(1) }, name);
+    }
+    const free = this.funcs.get(this.resolveName(name));
+    if (free) {
+      const fi = this.tryPick(free.overloads, raws, line, name);
+      if (fi) return this.callWith(fi.type, { line, args: nodes }, name, (f, vals, used, types) => this.invoke(fi, vals, line, used, types), fi, raws);
+    }
+    return null;
+  }
+
+  /** 맞는 연산자가 없을 때의 안내 */
+  noOpError(op, raws, line) {
+    const cls = raws.find((E) => isStruct(E.t)).t;
+    const T0 = typeName(cls);
+    let hint;
+    if (op === "<<") hint = `ostream &operator<<(ostream &os, const ${T0} &x) { os << …; return os; } 를 만들면 cout으로 출력할 수 있어요.`;
+    else if (op === ">>") hint = `istream &operator>>(istream &is, ${T0} &x) { is >> …; return is; } 를 만들면 cin으로 읽을 수 있어요.`;
+    else if (raws.length === 1) hint = `클래스 안에 ${T0} operator${op}() const { … } 를 만들어요.`;
+    else if (op === "[]") hint = `클래스 안에 int &operator[](int i) { … } 를 만들어요.`;
+    else hint = `클래스 안에 ${["==", "!=", "<", ">", "<=", ">="].includes(op) ? "bool" : T0} operator${op}(const ${T0} &other) const { … } 를 만들어요.`;
+    return compileError(line, `${T0}에는 맞는 '${op}' 연산자가 없어요`, hint);
   }
 
   /** 객체 식에서 그 주소를 꺼내는 함수 (이름 없는 값이면 임시 칸을 만들어요) */
@@ -1443,7 +1513,9 @@ export class Compiler {
       const R = this.value(this.expr(node.r), line);
       const t = R.t;
       if (isStruct(t)) {
-        throw compileError(line, `구조체(${typeName(t)})는 cout으로 바로 출력할 수 없어요`, "멤버를 하나씩 출력해 주세요. 예: cout << p.x << \" \" << p.y;  (operator<<는 C++ 4단계)");
+        const U = this.userOp("<<", [L, R], [node.l, node.r], line);
+        if (U) return U;
+        throw compileError(line, `구조체(${typeName(t)})는 cout으로 바로 출력할 수 없어요`, `멤버를 하나씩 출력하거나, ostream &operator<<(ostream &os, const ${typeName(t)} &p) { … return os; } 를 만들어요.`);
       }
       if (t.k === "stream") throw compileError(line, `${name} << 뒤에 스트림이 또 왔어요`, "예: cout << a << b;");
       if (t.k === "vector") throw compileError(line, "vector는 cout으로 한 번에 출력할 수 없어요", "for (int x : v) cout << x << ' '; 처럼 하나씩 출력해요.");
@@ -1461,7 +1533,11 @@ export class Compiler {
     if (R.bitfield) throw compileError(line, "비트 필드에는 cin으로 바로 읽을 수 없어요", "일반 변수에 읽은 뒤 옮겨 담아 주세요.");
     if (isArr(t) && !isCharLike(t.of)) throw compileError(line, "배열 전체는 cin으로 한 번에 읽을 수 없어요", "for 문으로 cin >> a[i]; 처럼 한 칸씩 읽어요.");
     if (isPtr(t)) throw compileError(line, "char * 에는 cin으로 글자를 읽을 수 없어요", "char 이름[크기]; 배열을 만들어서 cin >> 이름; 처럼 읽어요.");
-    if (isStruct(t)) throw compileError(line, `구조체(${typeName(t)})는 cin으로 바로 읽을 수 없어요`, "멤버를 하나씩 읽어 주세요. 예: cin >> p.x >> p.y;");
+    if (isStruct(t)) {
+      const U = this.userOp(">>", [L, R], [node.l, node.r], line);
+      if (U) return U;
+      throw compileError(line, `구조체(${typeName(t)})는 cin으로 바로 읽을 수 없어요`, `멤버를 하나씩 읽거나(cin >> p.x >> p.y;), istream &operator>>(istream &is, ${typeName(t)} &p) 를 만들어요.`);
+    }
     if (t.k === "vector") throw compileError(line, "vector 전체는 cin으로 한 번에 읽을 수 없어요", "for 문으로 cin >> v[i]; 처럼 한 칸씩 읽거나, 읽은 값을 push_back 해요.");
     if (t.k === "string") {
       const lev0 = L.ev;
@@ -1581,8 +1657,13 @@ export class Compiler {
       }
       return arr(of, len);
     }
+    if (t.k === "streamtype") {
+      this.needHeader("iostream", t.dir === "out" ? "ostream" : "istream", t.line ?? opts.line);
+      return t.dir === "out" ? OSTREAM : ISTREAM;
+    }
     if (t.k === "ref") {
       const to = this.resolveType(t.to, { line: opts.line });
+      if (to.k === "stream") return to; // ostream& 는 스트림 그 자체로 다뤄요
       if (to.k === "ref") throw compileError(t.line ?? opts.line, "참조의 참조는 만들 수 없어요");
       return { k: "ref", to, size: 8, toConst: Boolean(t.toConst) };
     }
@@ -2088,7 +2169,7 @@ export class Compiler {
       }
       if (st.staticNames.has(node.name)) return this.identifier({ k: "id", name: `${st.qname || st.tag}::${node.name}`, line });
     }
-    if (field && field.access && field.access !== "public" && !(this.fn && this.fn.cls === st)) {
+    if (field && field.access && field.access !== "public" && !this.canAccess(st)) {
       throw compileError(line, `'${node.name}'는 ${field.access} 멤버라 클래스 밖에서 쓸 수 없어요`,
         `클래스의 public 멤버 함수(예: get${node.name[0].toUpperCase()}${node.name.slice(1)}())로 꺼내거나, public: 아래로 옮겨요.`);
     }
@@ -2149,6 +2230,11 @@ export class Compiler {
     const L = this.value(this.expr(node.l), line);
     if (L.t.k === "stream") return this.streamOp(node, L);
     const R = this.value(this.expr(node.r), line);
+    if (this.cpp && (isStruct(L.t) || isStruct(R.t))) {
+      const E = this.userOp(op, [L, R], [node.l, node.r], line);
+      if (E) return E;
+      if (op === "==" || op === "!=" || !isStruct(L.t) || !isStruct(R.t) || L.t.methodMap) throw this.noOpError(op, [L, R], line);
+    }
     return this.binaryValues(op, L, R, line);
   }
 
@@ -2244,6 +2330,12 @@ export class Compiler {
     const { line } = node;
     const L = this.lvalue(node.l, `'${node.op}'`);
     const rt = this.rt;
+    if (this.cpp && isStruct(L.t) && (node.op !== "=" || (L.t.methodMap && L.t.methodMap.has("operator=")))) {
+      const R = this.expr(node.r);
+      const U = this.userOp(node.op, [L, R], [node.l, node.r], line);
+      if (U) return U;
+      throw this.noOpError(node.op, [L, R], line);
+    }
     if (isArr(L.t)) {
       const R = this.expr(node.r);
       throw compileError(line, "배열에는 = 로 한꺼번에 값을 넣을 수 없어요",
@@ -2317,6 +2409,11 @@ export class Compiler {
       return this.withLoad({ t: this.need(P.t.to, line), lv, isConst: Boolean(P.t.toConst) }, line);
     }
     const E = this.value(this.expr(node.e), line);
+    if (this.cpp && isStruct(E.t)) {
+      const U = this.userOp(op, [E], [node.e], line);
+      if (U) return U;
+      throw this.noOpError(op, [E], line);
+    }
     if (op === "!" && E.t.k === "stream") {
       const S = E.ev;
       return { t: T.bool, ev: (f) => (rt.streamState(S(f)).fail ? 1 : 0) };
@@ -2349,6 +2446,15 @@ export class Compiler {
     const rt = this.rt;
     const L = this.lvalue(node.e, `'${node.op}'`);
     const t = L.t;
+    if (this.cpp && isStruct(t)) {
+      // ++a 는 operator++(), a++ 는 operator++(int)
+      const raws = pre ? [L] : [L, { t: T.int, ev: () => 0, cv: 0 }];
+      const nodes = pre ? [node.e] : [node.e, { k: "num", value: 0, type: T.int, line }];
+      const U = this.userOp(node.op, raws, nodes, line);
+      if (U) return U;
+      throw compileError(line, `${typeName(t)}에는 ${pre ? `앞에 붙는 ${node.op}` : `뒤에 붙는 ${node.op}`} 연산자가 없어요`,
+        pre ? `${typeName(t)} &operator${node.op}() { …; return *this; } 를 만들어요.` : `${typeName(t)} operator${node.op}(int) { … } 를 만들어요. (int는 뒤에 붙는다는 표시예요)`);
+    }
     if (!isScalar(t)) throw compileError(line, `'${node.op}'는 숫자나 주소 변수에만 쓸 수 있어요`);
     const d = node.op === "++" ? 1 : -1;
     let step;
@@ -2385,6 +2491,12 @@ export class Compiler {
     const rt = this.rt;
     let B = this.expr(node.e);
     if (this.cpp && isObj(B.t)) return this.objIndex(B, node.i, line, false);
+    if (this.cpp && isStruct(B.t)) {
+      const Ix = this.expr(node.i);
+      const U = this.userOp("[]", [B, Ix], [node.e, node.i], line);
+      if (U) return U;
+      throw this.noOpError("[]", [B, Ix], line);
+    }
     let I = this.expr(node.i);
     if (B.fnName) throw compileError(line, `함수 '${B.fnName}'에는 [ ]를 쓸 수 없어요`);
     B = this.value(B, line);
@@ -2516,6 +2628,12 @@ export class Compiler {
     }
     // 함수 포인터로 부르기: fp(1, 2), (*fp)(1, 2), ops[i](1, 2)
     const C = this.value(this.expr(node.callee), line);
+    if (this.cpp && isStruct(C.t)) {
+      const raws = [C, ...node.args.map((a) => this.expr(a))];
+      const U = this.userOp("()", raws, [node.callee, ...node.args], line);
+      if (U) return U;
+      throw this.noOpError("()", raws, line);
+    }
     if (!isFuncPtr(C.t)) {
       const name = node.callee.k === "id" ? `'${node.callee.name}'는` : "이 값은";
       throw compileError(line, `${name} 함수가 아니라서 ( )를 붙일 수 없어요`, `${friendlyType(C.t)}예요.`);
@@ -2643,6 +2761,13 @@ export class Compiler {
       }
       const raw = pre && pre[i] && !pre[i].initlist ? pre[i] : this.expr(a);
       if (params[i] && params[i].type.k === "ref") return { ev: this.bindRef(params[i].type, raw, line, `'${name}'의 ${i + 1}번째 값`) };
+      if (this.cpp && params[i] && isStruct(params[i].type) && this.copyCtor(params[i].type) && sameType(raw.t, params[i].type) && a && a.k) {
+        // 값으로 넘기면 복사 생성자로 복사본을 만들어요
+        const pt = params[i].type;
+        const make = this.classInit(pt, { k: "ctor", args: [a], line }, line, `'${name}'의 ${i + 1}번째 값`);
+        const zeros = zerosOf(pt);
+        return { ev: (f) => { const st = new Store(cells(pt), "복사본", pt); st.cells = zeros.slice(); make(f, new Ptr(st, 0)); return st.cells; } };
+      }
       const E = this.value(raw, line);
       if (params[i]) return this.conv(E, params[i].type, line, `'${name}'의 ${i + 1}번째 값`);
       // ... 자리의 값: char, short는 int로, float은 double로 커져서 넘어가요
@@ -3262,7 +3387,8 @@ export class Compiler {
     }
     const dims = [];
     def.type.params.forEach((p, i) => {
-      if (!p.name) throw compileError(def.line, `함수 '${fi.name}'의 ${i + 1}번째 매개변수에 이름이 필요해요`);
+      if (!p.name && !this.cpp) throw compileError(def.line, `함수 '${fi.name}'의 ${i + 1}번째 매개변수에 이름이 필요해요`);
+      if (!p.name) p = { ...p, name: ` 이름없음${i}` }; // C++: 쓰지 않는 매개변수는 이름을 빼도 돼요 (operator++(int))
       let type = fi.type.params[i].type;
       if (hasAnyLen(type)) {
         // int m[n][n] 같은 매개변수: 앞의 매개변수 n으로 크기를 정해요
@@ -3551,6 +3677,18 @@ export class Compiler {
         }
         if (isVoid(ret)) {
           throw compileError(line, `void 함수 '${this.fn.name}'는 값을 돌려줄 수 없어요`, "값을 돌려주려면 함수 앞의 void를 int 같은 타입으로 바꿔요.");
+        }
+        if (node.e.k === "initlist") {
+          // return {1, 2}; : 돌려주는 타입의 값을 { }로 만들어요
+          let ev;
+          if (isStruct(ret)) {
+            const c = this.constructInit(ret, node.e, line, "돌려주는 값");
+            const zeros = zerosOf(ret);
+            ev = (f) => { const st = new Store(cells(ret), "돌려주는 값", ret); st.cells = zeros.slice(); if (c) c(f, new Ptr(st, 0)); return st.cells; };
+          } else if (isObj(ret)) ev = this.objectValue(ret, node.e, line, "돌려주는 값");
+          else if (node.e.items.length === 1) ev = this.conv(this.value(this.expr(node.e.items[0]), line), ret, line, "돌려주는 값").ev;
+          else throw compileError(line, `${typeName(ret)}를 돌려줄 때는 { } 안에 값 하나만 넣어요`);
+          return (f) => { rt.line = line; rt.ret = ev(f); return RETURN; };
         }
         if (ret.k === "ref") {
           const ev = this.bindRef(ret, this.expr(node.e), line, "돌려주는 참조");

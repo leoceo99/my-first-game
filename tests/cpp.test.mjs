@@ -74,8 +74,7 @@ test("C++ 모드: 아직 없는 기능은 단계와 함께 안내해요", () => 
   const cases = [
     ["#include <map>\nint main() {}", /<map>.*다음 단계/],
     ["#include <iostream>\nusing namespace std;\nint main() { map<int, int> m; }", /std::map.*5단계/],
-    ["struct V { int x; };\nV operator+(V a, V b) { return a; }\nint main() {}", /'operator'.*4단계/],
-    ["class A { friend void f(); };\nint main() {}", /'friend'.*4단계/],
+    ["struct A { virtual void f() {} };\nint main() {}", /'virtual'.*6단계/],
     ["int main() { template <typename T> int x; }", /'template'.*5단계/],
     ["int main() { try { } catch (int e) { } }", /'try'.*6단계/],
   ];
@@ -304,12 +303,44 @@ for (const [name, code, want, inputs] of STAGE3) {
   });
 }
 
+
+// ---------- 4단계: 연산자 오버로딩 ----------
+const H4 = "#include <iostream>\n#include <string>\n#include <vector>\nusing namespace std;\n";
+const V4 = "struct V {\n  int x, y;\n  V operator+(const V &o) const { return {x + o.x, y + o.y}; }\n  V operator-() const { return {-x, -y}; }\n  bool operator==(const V &o) const { return x == o.x && y == o.y; }\n  bool operator!=(const V &o) const { return !(*this == o); }\n  V &operator+=(const V &o) { x += o.x; y += o.y; return *this; }\n};\nostream &operator<<(ostream &os, const V &v) { return os << \"(\" << v.x << \",\" << v.y << \")\"; }\n";
+const STAGE4 = [
+  ["괄호 안의 Type(값)은 형 변환이 아니라 객체", H4 + "struct F { int n; F(int a) : n(a) {} bool operator==(const F &o) const { return n == o.n; } };\nint main() { cout << (F(2) == F(2) ? \"같음\" : \"다름\") << (F{3}.n) << endl; }", "같음3\n"],
+  ["멤버 +, 일반 <<", H4 + V4 + "int main() { V a{1, 2}, b{3, 4}; cout << a + b << endl; }", "(4,6)\n"],
+  ["단항 -, ==, !=", H4 + V4 + "int main() { V a{1, 2}; V b = -a; cout << b << (a == a) << (a != b) << endl; }", "(-1,-2)11\n"],
+  ["+= 이어 쓰기", H4 + V4 + "int main() { V a{1, 1}; (a += V{1, 0}) += V{0, 5}; cout << a << endl; }", "(2,6)\n"],
+  ["cout 이어 쓰기", H4 + V4 + "int main() { V a{1, 2}; cout << \"a=\" << a << \", -a=\" << -a << \"!\" << endl; }", "a=(1,2), -a=(-1,-2)!\n"],
+  ["일반 함수 연산자", H4 + "struct M { int v; };\nM operator*(const M &a, int k) { return {a.v * k}; }\nM operator*(int k, const M &a) { return {a.v * k * 10}; }\nint main() { M m{2}; cout << (m * 3).v << (3 * m).v << endl; }", "660\n"],
+  ["friend와 private", H4 + "class Money {\n  int won;\npublic:\n  Money(int w) : won(w) {}\n  Money operator+(const Money &o) const { return Money(won + o.won); }\n  friend ostream &operator<<(ostream &os, const Money &m);\n};\nostream &operator<<(ostream &os, const Money &m) { os << m.won << \"원\"; return os; }\nint main() { Money a(1000), b(500); cout << a + b << endl; }", "1500원\n"],
+  ["friend 몸통 안", H4 + "class P {\n  int x;\npublic:\n  P(int v) : x(v) {}\n  friend ostream &operator<<(ostream &os, const P &p) { return os << \"P\" << p.x; }\n};\nint main() { cout << P(7) << endl; }", "P7\n"],
+  ["operator>>", H4 + "struct Pt { int x, y; };\nistream &operator>>(istream &is, Pt &p) { return is >> p.x >> p.y; }\nostream &operator<<(ostream &os, const Pt &p) { return os << p.x + p.y; }\nint main() { Pt p; cin >> p; cout << p << endl; }", "7\n", ["3 4"]],
+  ["operator[]", H4 + "class Arr {\n  int d[3] = {10, 20, 30};\npublic:\n  int &operator[](int i) { return d[i]; }\n};\nint main() { Arr a; a[1] = 5; a[2] += 1; cout << a[0] << a[1] << a[2] << endl; }", "10531\n"],
+  ["operator()", H4 + "struct Add { int base; int operator()(int x) const { return base + x; } };\nint main() { Add add5{5}; cout << add5(3) << endl; }", "8\n"],
+  ["++ 앞/뒤", H4 + "class C {\n  int n = 0;\npublic:\n  C &operator++() { n++; return *this; }\n  C operator++(int) { C old = *this; n++; return old; }\n  int get() const { return n; }\n};\nint main() { C c; ++c; C old = c++; cout << old.get() << c.get() << endl; }", "12\n"],
+  ["< 비교", H4 + "struct S { int score; bool operator<(const S &o) const { return score < o.score; } };\nint main() { S a{3}, b{5}; cout << (a < b) << (b < a) << endl; }", "10\n"],
+  ["operator= 와 복사 생성자", H4 + "class T {\npublic:\n  int v;\n  T(int x) : v(x) {}\n  T(const T &o) : v(o.v) { cout << \"copy \"; }\n  T &operator=(const T &o) { v = o.v * 10; cout << \"assign \"; return *this; }\n};\nvoid take(T t) { cout << t.v << \" \"; }\nint main() { T a(1); T b = a; T c(a); take(a); c = b; cout << c.v << endl; }", "copy copy copy 1 assign 10\n"],
+  ["연산자 없음 안내", H4 + "struct P { int x; };\nint main() { P a{1}, b{2}; P c = a + b; }", "ERR"],
+  ["cout 구조체 안내", H4 + "struct P { int x; };\nint main() { P a{1}; cout << a; }", "ERR"],
+  ["== 없음 안내", H4 + "struct P { int x; };\nint main() { P a{1}; cout << (a == a); }", "ERR"],
+  ["vector 안의 객체 출력", H4 + V4 + "int main() { vector<V> vs = {{1, 2}, {3, 4}}; V sum{0, 0}; for (const V &v : vs) sum += v; cout << sum << endl; }", "(4,6)\n"],
+  ["클래스 밖 연산자 정의", H4 + "class F {\n  int n, d;\npublic:\n  F(int a, int b) : n(a), d(b) {}\n  F operator*(const F &o) const;\n  void print() const { cout << n << \"/\" << d << endl; }\n};\nF F::operator*(const F &o) const { return F(n * o.n, d * o.d); }\nint main() { F a(1, 2), b(3, 4); (a * b).print(); }", "3/8\n"],
+  ["string 멤버와 연산자", H4 + "struct Name { string s; Name operator+(const Name &o) const { return {s + \" \" + o.s}; } };\nint main() { Name a{\"홍\"}, b{\"길동\"}; cout << (a + b).s << endl; }", "홍 길동\n"],
+  ["return {} 로 string, vector", H4 + "vector<int> two() { return {1, 2}; }\nstring hi() { return {\"hi\"}; }\nint main() { cout << two().size() << hi() << endl; }", "2hi\n"],
+  ["V 목표", "#include <iostream>\nstruct V { int x, y; V operator+(const V &o) const { return {x + o.x, y + o.y}; } };\nstd::ostream &operator<<(std::ostream &os, const V &v) { return os << \"(\" << v.x << \",\" << v.y << \")\"; }\nint main() { std::cout << V{1, 2} + V{3, 4} << \"\\n\"; }", "(4,6)\n"],
+];
+for (const [name, code, want, inputs] of STAGE4) {
+  test(`C++ 4단계: ${name}`, () => {
+    const r = run(code, inputs);
+    if (want === "ERR") assert.equal(r.status, "error", r.out);
+    else ok(code, want, inputs);
+  });
+}
+
 // ---------- 앞으로의 단계: 목표 프로그램 ----------
 const TODO = [
-  [4, "연산자 오버로딩", `#include <iostream>
-struct V { int x, y; V operator+(const V &o) const { return {x + o.x, y + o.y}; } };
-std::ostream &operator<<(std::ostream &os, const V &v) { return os << "(" << v.x << "," << v.y << ")"; }
-int main() { std::cout << V{1, 2} + V{3, 4} << "\\n"; }`, "(4,6)\n"],
   [5, "템플릿과 sort", `#include <iostream>
 #include <vector>
 #include <algorithm>

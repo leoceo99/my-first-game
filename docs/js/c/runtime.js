@@ -329,6 +329,7 @@ export class Runtime {
     const v = store.cells[off];
     if (v === undefined) return "?";
     if (v instanceof FnRef) return `→ 함수 ${v.fi.name}`;
+    if (type.k === "stream") return v && v.name ? v.name.replace("std", "") : "스트림";
     if (type.k === "string") return JSON.stringify(new TextDecoder().decode(Uint8Array.from(strBytes(v))));
     if (type.k === "vector") {
       const n = vecLen(v);
