@@ -35,6 +35,7 @@ class Parser {
     this.ns = []; // 지금 들어가 있는 이름공간들
     this.usingStd = false; // using namespace std; 뒤인가요?
     this.classes = []; // C++ 클래스들 (멤버 함수가 있는 구조체)
+    this.templates = new Map(); // 템플릿 이름 → 템플릿
     this.usingNames = new Set();
     this.tags = new Map(); // struct 이름들
     this.typedefs = [new Map()]; // typedef 이름들 (블록마다 한 층)
@@ -115,7 +116,7 @@ class Parser {
   stdTypeName(tok = this.cur) {
     if (!this.cpp || tok.k !== "id") return null;
     const base = tok.v.startsWith("std::") ? tok.v.slice(5) : (this.usingStd || this.usingNames.has(tok.v)) ? tok.v : null;
-    return ["string", "vector", "ostream", "istream"].includes(base) ? base : null;
+    return ["string", "vector", "ostream", "istream", "pair"].includes(base) ? base : null;
   }
 
   /** string / vector<타입> */
@@ -124,6 +125,14 @@ class Parser {
     const kind = this.stdTypeName(tok);
     if (kind === "string") return { k: "string", line: tok.line };
     if (kind === "ostream" || kind === "istream") return { k: "streamtype", dir: kind === "ostream" ? "out" : "in", line: tok.line };
+    if (kind === "pair") {
+      this.expect("<", "예: pair<int, string> p;");
+      const a = this.typeName();
+      this.expect(",", "pair<첫째 타입, 둘째 타입> 처럼 타입 두 개를 넣어요");
+      const b = this.typeName();
+      this.closeAngle();
+      return { k: "pair", a, b, line: tok.line };
+    }
     this.expect("<", "예: vector<int> v;");
     const of = this.typeName();
     this.closeAngle();
@@ -180,6 +189,12 @@ class Parser {
         continue;
       } else if (!named && words.length === 0 && this.isTypedefName(v)) {
         named = this.typedefType(v);
+        if (named.k === "tmplref") {
+          // 클래스 템플릿: Box<int>
+          this.next();
+          named = this.templateArgs(named.tmpl, this.cur.line);
+          continue;
+        }
       } else break;
       this.next();
     }
@@ -367,6 +382,99 @@ class Parser {
     t.isCppClass = true;
     this.classes.push(t);
     return t;
+  }
+
+  /** template <typename T> 함수 또는 클래스 */
+  templateDecl() {
+    const line = this.next().line;
+    this.expect("<", "예: template <typename T>");
+    const params = [];
+    if (!this.is(">")) {
+      do {
+        if (!this.accept("typename") && !this.accept("class")) {
+          throw compileError(this.cur.line, "템플릿 매개변수는 typename T 처럼 써요", "숫자를 받는 template <int N> 은 아직 지원하지 않아요.");
+        }
+        const n = this.next();
+        if (n.k !== "id") throw compileError(n.line, "typename 뒤에는 이름이 와요", "예: template <typename T>");
+        params.push({ name: n.v });
+      } while (this.accept(","));
+    }
+    this.closeAngle();
+    this.typedefs.push(new Map(params.map((p) => [p.name, { k: "tparam", name: p.name }])));
+    let tmpl;
+    if ((this.is("class") || this.is("struct")) && this.peek().k === "id" && (this.is("{", this.t[this.i + 2]) || this.is(":", this.t[this.i + 2]))) {
+      const name = this.peek().v;
+      tmpl = { k: "template", kind: "class", name: this.nsName(name), params, line, insts: new Map() };
+      this.typedefs[0].set(name, { k: "tmplref", tmpl });
+      if (this.ns.length) this.typedefs[0].set(this.nsName(name), { k: "tmplref", tmpl });
+      const before = this.classes.length;
+      const specs = this.declSpecs();
+      this.classes.length = before; // 템플릿 자체는 클래스가 아니에요: 쓸 때 타입마다 만들어요
+      tmpl.cls = specs.type;
+      specs.type.tmplPattern = tmpl;
+      this.expect(";", "클래스 템플릿은 }; 로 끝나요");
+    } else {
+      const specs = this.declSpecs();
+      if (!specs) throw compileError(line, "template 뒤에는 함수나 클래스가 와요");
+      const d = this.declarator(specs.type, false, specs.isConst);
+      if (d.type.k !== "func" || !this.is("{")) {
+        if (d.name && d.name.includes("::")) throw compileError(line, "클래스 템플릿의 멤버 함수는 클래스 안에서 만들어 주세요");
+        throw compileError(line, "template 뒤에는 몸통 { } 이 있는 함수나 클래스가 와요");
+      }
+      tmpl = { k: "template", kind: "func", name: this.nsName(d.name), params, type: d.type, body: this.block(), line: d.line, ns: this.nsPath(), insts: new Map() };
+      const list = this.templates.get(tmpl.name) || [];
+      list.push(tmpl);
+      this.templates.set(tmpl.name, list);
+    }
+    this.typedefs.pop();
+    if (tmpl.kind === "class") this.templates.set(tmpl.name, [tmpl]);
+    return { k: "template", tmpl, line };
+  }
+
+  /** Box<int, string> 의 <…> 부분 */
+  templateArgs(tmpl, line) {
+    this.expect("<", `${tmpl.name}<타입> 처럼 써요`);
+    const args = [];
+    if (!this.is(">")) {
+      do args.push(this.typeName()); while (this.accept(","));
+    }
+    this.closeAngle();
+    return { k: "tinst", tmpl, args, line };
+  }
+
+  /** biggest<double>(…) 처럼 함수 템플릿에 타입을 직접 주는 것인지 살펴서, 맞으면 타입들을 돌려줘요 */
+  tryTemplateCallArgs() {
+    const save = this.i;
+    try {
+      this.expect("<");
+      const args = [];
+      do args.push(this.typeName()); while (this.accept(","));
+      this.closeAngle();
+      if (this.is("(")) return args;
+    } catch (e) {
+      if (!(e instanceof Error)) throw e;
+    }
+    this.i = save;
+    return null;
+  }
+
+  /** [캡처](매개변수) -> 타입 { 몸통 } */
+  lambda() {
+    const line = this.next().line;
+    let capture = "";
+    while (!this.is("]")) {
+      if (this.cur.k === "eof") throw compileError(line, "람다의 [ 를 ] 로 닫아 주세요");
+      capture += this.next().v || "";
+    }
+    this.next();
+    let ps = { params: [] };
+    if (this.is("(")) ps = this.params();
+    while (this.is("mutable") || this.is("noexcept")) this.next();
+    let ret = null;
+    if (this.accept("->")) ret = this.typeName();
+    if (!this.is("{")) throw compileError(this.cur.line, "람다에는 몸통 { } 이 필요해요", "예: [](int a, int b) { return a < b; }");
+    const body = this.block();
+    return { k: "lambda", params: ps.params, ret, body, capture, line };
   }
 
   /** operator+, operator<<, operator[], operator() … */
@@ -630,6 +738,7 @@ class Parser {
       if (this.is("_Static_assert")) { items.push(this.staticAssert()); continue; }
       if (this.cpp && this.is("using")) { items.push(this.usingDecl()); continue; }
       if (this.cpp && this.is("namespace")) { this.namespaceBlock(items); continue; }
+      if (this.cpp && this.is("template")) { items.push(this.templateDecl()); continue; }
       if (this.cpp && this.cur.k === "id" && /::~?\w+$/.test(this.cur.v) && this.is("(", this.peek())) {
         const parts = this.cur.v.split("::");
         const last = parts[parts.length - 1];
@@ -681,7 +790,7 @@ class Parser {
         items.push(decl);
       }
     }
-    return { items, builtinTypes: this.builtinTypes, classes: this.classes };
+    return { items, builtinTypes: this.builtinTypes, classes: this.classes, templates: this.templates };
   }
 
   declRest(specs, first) {
@@ -1072,7 +1181,42 @@ class Parser {
 
   primary() {
     const tok = this.cur;
-    if (this.cpp && ["string", "vector"].includes(this.stdTypeName(tok)) && !this.is("::", this.peek())) {
+    if (this.cpp && this.is("[")) return this.lambda();
+    if (this.cpp && tok.k === "id" && this.is("<", this.peek())) {
+      const base = tok.v.startsWith("std::") ? tok.v.slice(5) : tok.v;
+      if ((base === "greater" || base === "less") && (tok.v.startsWith("std::") || this.usingStd)) {
+        // greater<int>() : 큰 것부터 정렬하는 비교
+        this.next();
+        this.expect("<");
+        const type = this.typeName();
+        this.closeAngle();
+        this.expect("(");
+        this.expect(")");
+        return { k: "cmpobj", dir: base, type, line: tok.line };
+      }
+      const tl = this.templates.get(tok.v);
+      if (tl && tl[0].kind === "func") {
+        this.next();
+        const targs = this.tryTemplateCallArgs();
+        if (targs) return { k: "id", name: tok.v, targs, line: tok.line };
+        return { k: "id", name: tok.v, line: tok.line };
+      }
+      const td = this.isTypedefName(tok.v) ? this.typedefType(tok.v) : null;
+      if (td && td.k === "tmplref") {
+        // Box<int>(3), Box<int>{3}
+        this.next();
+        const type = this.templateArgs(td.tmpl, tok.line);
+        if (this.is("{")) return { k: "construct", type, list: this.initializer(), line: tok.line };
+        this.expect("(", `${tok.v}<…>(값) 처럼 써요`);
+        const args = [];
+        if (!this.is(")")) {
+          do args.push(this.is("{") ? this.initializer() : this.assignment()); while (this.accept(","));
+        }
+        this.expect(")");
+        return { k: "construct", type, args, line: tok.line };
+      }
+    }
+    if (this.cpp && ["string", "vector", "pair"].includes(this.stdTypeName(tok)) && !this.is("::", this.peek())) {
       // string("abc"), vector<int>(3, 0), vector<int>{1, 2}
       const type = this.objType();
       if (this.is("{")) return { k: "construct", type, list: this.initializer(), line: tok.line };

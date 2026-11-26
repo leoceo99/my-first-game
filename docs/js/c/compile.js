@@ -22,6 +22,9 @@ const MAX_DEPTH = 2500;
 const NULL_HEADERS = ["stdio.h", "stdlib.h", "string.h", "stddef.h", "time.h"];
 /** string과 함께 쓰는 std 함수들 */
 const STR_FUNCS = new Set(["getline", "to_string", "stoi", "stol", "stoll", "stod", "stof"]);
+/** <algorithm>, <numeric>, <utility> 함수들 */
+const ALGOS = new Set(["sort", "stable_sort", "reverse", "find", "find_if", "count", "count_if", "accumulate", "max_element",
+  "min_element", "fill", "binary_search", "make_pair"]);
 
 function editDistance(a, b) {
   const d = Array.from({ length: a.length + 1 }, (_, i) => [i]);
@@ -215,6 +218,10 @@ export class Compiler {
     this.usingNs = new Set(); // using namespace geo;
     this.ns = ""; // 지금 컴파일하는 코드가 들어 있는 이름공간
     this.classMap = new Map(); // 클래스 이름 → 클래스 타입
+    this.templates = new Map(); // 템플릿 이름 → [템플릿]
+    this.tsubst = null; // 템플릿을 만드는 중이면 T → 실제 타입
+    this.lambda = null; // 람다 몸통을 컴파일하는 중이면 그 정보
+    this.pairTypes = new Map();
     this.funcs = new Map();
     this.globalScope = { vars: new Map(), parent: null };
     this.scope = this.globalScope;
@@ -571,8 +578,8 @@ export class Compiler {
 
   /** 이름공간 안이나 using namespace 뒤에서 짧은 이름을 긴 이름(geo::area)으로 찾아요 */
   resolveName(name) {
-    if (!this.cpp || this.lookup(name) || this.funcs.has(name)) return name;
-    const has = (n) => this.globalScope.vars.has(n) || this.funcs.has(n);
+    if (!this.cpp || this.lookup(name) || this.funcs.has(name) || this.templates.has(name)) return name;
+    const has = (n) => this.globalScope.vars.has(n) || this.funcs.has(n) || this.templates.has(n);
     const parts = this.ns ? this.ns.split("::") : [];
     for (let k = parts.length; k > 0; k--) {
       const full = `${parts.slice(0, k).join("::")}::${name}`;
@@ -860,6 +867,7 @@ export class Compiler {
   /** 클래스 객체 하나 만들기: 생성자 고르기, { } 로 바로 넣기, 같은 타입 값 복사 */
   classInit(cls, init, line, name) {
     this.layout(cls, line);
+    if (cls.isPair && init && init.k === "ctor" && init.args.length === 2) init = { k: "initlist", items: init.args, line }; // pair<int, int> p(1, 2)
     const rt = this.rt;
     const user = (cls.ctors || []).filter((c) => !c.implicit);
     const implicit = (cls.ctors || []).find((c) => c.implicit);
@@ -1025,6 +1033,437 @@ export class Compiler {
     const n = cells(B.t);
     const t = B.t;
     return (f) => { const st = new Store(n, "임시 객체", t); st.cells = ev(f); return new Ptr(st, 0); };
+  }
+
+  // ---------- C++ 5단계: 템플릿, 람다, pair, 알고리즘 ----------
+  /** 다른 함수를 컴파일하는 도중에 새 함수를 컴파일할 수 있게, 지금 상태를 잠깐 치워 둬요 */
+  inContext(opts, work) {
+    const keys = ["fn", "scope", "loops", "switches", "labelScopes", "fnLabels", "ns", "tsubst", "lambda"];
+    const saved = keys.map((k) => this[k]);
+    Object.assign(this, { fn: null, scope: this.globalScope, loops: 0, switches: 0, labelScopes: [], fnLabels: new Set(), ns: opts.ns || "", tsubst: opts.tsubst || null, lambda: null });
+    try {
+      return work();
+    } finally {
+      keys.forEach((k, i) => { this[k] = saved[i]; });
+    }
+  }
+
+  /** pair<A, B>: first, second 멤버가 있는 구조체 */
+  pairOf(A, B) {
+    const key = `${typeName(A)}, ${typeName(B)}`;
+    let t = this.pairTypes.get(key);
+    if (t) return t;
+    t = {
+      k: "struct", tag: null, alias: `pair<${key}>`, isUnion: false, complete: true, isCppClass: true, isPair: true, line: 0,
+      fields: [{ name: "first", type: A, line: 0, access: "public" }, { name: "second", type: B, line: 0, access: "public" }],
+      methods: [], statics: [], friends: [], classEnums: [],
+    };
+    this.pairTypes.set(key, t);
+    this.inContext({}, () => this.registerClasses([t]));
+    return t;
+  }
+
+  /** 클래스 템플릿 Box<int> 를 실제 클래스로 만들어요 (같은 타입이면 한 번만) */
+  instantiateClass(tmpl, args, line) {
+    if (args.length !== tmpl.params.length) throw compileError(line, `${tmpl.name}에는 타입 ${tmpl.params.length}개를 넣어요`);
+    const key = args.map(typeName).join(", ");
+    if (tmpl.insts.has(key)) return tmpl.insts.get(key);
+    const pat = tmpl.cls;
+    const name = `${tmpl.name}<${key}>`;
+    const inst = {
+      k: "struct", tag: pat.tag, alias: name, qname: name, isUnion: false, complete: true, isCppClass: true, isClass: pat.isClass, line: pat.line,
+      fields: pat.fields.map((f) => ({ ...f })), methods: pat.methods, statics: pat.statics, friends: pat.friends || [], classEnums: [],
+      tmplInst: { tmpl, args },
+    };
+    tmpl.insts.set(key, inst);
+    const tsubst = new Map(tmpl.params.map((q, i) => [q.name, args[i]]));
+    this.inContext({ tsubst }, () => {
+      this.registerClasses([inst]);
+      for (const fi of inst.allFis) {
+        if (!fi.def || fi.compiled) continue;
+        fi.compiled = true;
+        this.inContext({ tsubst, ns: fi.ns }, () => this.compileFunction(fi));
+      }
+    });
+    return inst;
+  }
+
+  /** 템플릿 매개변수 모양(p)과 실제 타입(a)을 맞춰 보며 T를 정해요 */
+  unify(p, a, map, line, who) {
+    if (!p || !a) return;
+    if (p.k === "tparam") {
+      if (map.fixed && map.fixed.has(p.name)) return; // half<double>(7): 직접 적은 타입이 이겨요
+      const prev = map.get(p.name);
+      if (!prev) { map.set(p.name, a); return; }
+      if (!sameType(prev, a) || Boolean(prev.isBool) !== Boolean(a.isBool)) {
+        throw compileError(line, `${who}의 ${p.name}를 ${typeName(prev)}와 ${typeName(a)} 중 무엇으로 할지 정할 수 없어요`,
+          `두 값의 타입을 같게 하거나 ${who}<${typeName(prev)}>(…) 처럼 직접 적어 주세요.`);
+      }
+      return;
+    }
+    if (p.k === "ref") return this.unify(p.to, a, map, line, who);
+    if (p.k === "ptr") {
+      if (isPtr(a)) this.unify(p.to, a.to, map, line, who);
+      else if (isArr(a)) this.unify(p.to, a.of, map, line, who);
+      return;
+    }
+    if (p.k === "array") {
+      if (isArr(a)) this.unify(p.of, a.of, map, line, who);
+      else if (isPtr(a)) this.unify(p.of, a.to, map, line, who);
+      return;
+    }
+    if (p.k === "vector" && a.k === "vector") return this.unify(p.of, a.of, map, line, who);
+    if (p.k === "pair" && a.isPair) {
+      this.unify(p.a, a.fields[0].type, map, line, who);
+      this.unify(p.b, a.fields[1].type, map, line, who);
+      return;
+    }
+    if (p.k === "tinst" && a.tmplInst && a.tmplInst.tmpl === p.tmpl) p.args.forEach((x, i) => this.unify(x, a.tmplInst.args[i], map, line, who));
+  }
+
+  /** 함수 템플릿 biggest<double> 을 실제 함수로 만들어요 (같은 타입이면 한 번만) */
+  instantiateFunc(tmpl, args, line) {
+    const key = args.map(typeName).join(", ");
+    if (tmpl.insts.has(key)) return tmpl.insts.get(key);
+    const tsubst = new Map(tmpl.params.map((q, i) => [q.name, args[i]]));
+    return this.inContext({ tsubst, ns: tmpl.ns }, () => {
+      const type = this.resolveType(tmpl.type, { line });
+      const fi = {
+        name: `${tmpl.name}<${key}>`, type, line: tmpl.line, body: null, slotCount: 0, locals: [], params: [],
+        def: { type: tmpl.type, body: tmpl.body, line: tmpl.line, ns: tmpl.ns },
+      };
+      fi.ref = new FnRef(fi);
+      fi.overloads = [fi];
+      tmpl.insts.set(key, fi);
+      this.compileFunction(fi);
+      return fi;
+    });
+  }
+
+  /** biggest(2.5, 1.5): 넣은 값의 타입으로 T를 정하고 그 함수를 불러요 */
+  callTemplate(list, node, targs) {
+    const { line } = node;
+    const tmpl = list.find((t) => t.type.params.length >= node.args.length) || list[0];
+    const raws = node.args.map((a) => (a.k === "initlist" ? null : this.expr(a)));
+    const map = new Map();
+    if (targs) {
+      if (targs.length > tmpl.params.length) throw compileError(line, `${tmpl.name}에는 타입을 ${tmpl.params.length}개까지 넣어요`);
+      targs.forEach((t, i) => map.set(tmpl.params[i].name, this.resolveType(t, { line })));
+      map.fixed = new Set(map.keys());
+    }
+    tmpl.type.params.forEach((p, i) => {
+      if (!raws[i]) return;
+      const a = p.type.k === "ref" ? raws[i].t : this.value(raws[i], line).t;
+      this.unify(p.type, a, map, line, tmpl.name);
+    });
+    for (const q of tmpl.params) {
+      if (!map.has(q.name)) {
+        throw compileError(line, `${tmpl.name}의 타입 ${q.name}를 넣은 값으로 알 수 없어요`, `${tmpl.name}<int>(…) 처럼 직접 적어 주세요.`);
+      }
+    }
+    const fi = this.instantiateFunc(tmpl, tmpl.params.map((q) => map.get(q.name)), line);
+    return this.callWith(fi.type, node, fi.name, (f, vals, used, types) => this.invoke(fi, vals, line, used, types), fi, raws);
+  }
+
+  /** [&](int a, int b) { return a < b; } : 만든 자리의 변수를 그대로 쓰는 함수 값 */
+  lambdaExpr(node) {
+    const { line } = node;
+    const rt = this.rt;
+    if (!this.fn) throw compileError(line, "람다는 함수 안에서 만들어요");
+    this.push();
+    const params = node.params.map((p, i) => {
+      if (!p.name) p = { ...p, name: ` 람다값${i}` };
+      if (p.type.k === "auto" || (p.type.k === "ref" && p.type.to.k === "auto")) {
+        throw compileError(line, "람다 매개변수의 auto는 아직 지원하지 않아요", "int, const string & 처럼 타입을 적어 주세요.");
+      }
+      const type = this.resolveType(p.type, { param: true, line });
+      const t = isArr(type) ? ptr(type.of) : type;
+      const info = { name: p.name, type: t, slot: this.fn.slotCount++, line, cells: cells(this.need(t, line)), isConst: p.isConst };
+      this.declare(info);
+      return info;
+    });
+    const ftype = { k: "func", ret: node.ret ? this.resolveType(node.ret, { line }) : { k: "autoRet" }, params: params.map((i) => ({ name: i.name, type: i.type })) };
+    const saved = [this.lambda, this.loops, this.switches];
+    this.lambda = { ftype };
+    this.loops = 0;
+    this.switches = 0;
+    let body;
+    try {
+      body = this.block(node.body, false);
+    } finally {
+      [this.lambda, this.loops, this.switches] = saved;
+      this.pop();
+    }
+    if (ftype.ret.k === "autoRet") ftype.ret = T.void;
+    const type = { k: "lambda", name: "람다", ftype, size: 8, node };
+    return {
+      t: type,
+      ev: (f) => ({
+        lambda: true,
+        ftype,
+        call: (vals) => {
+          for (let i = 0; i < params.length; i++) {
+            const p = params[i];
+            const st = new Store(p.cells, p.name, p.type);
+            if (p.cells === 1) st.cells[0] = vals[i];
+            else st.cells = vals[i].slice();
+            f[p.slot] = st;
+          }
+          const c = body(f);
+          if (c === RETURN) {
+            const v = rt.ret;
+            rt.ret = undefined;
+            return v;
+          }
+          return undefined;
+        },
+      }),
+    };
+  }
+
+  /** a < b 를 계산하는 함수 (원소 값 두 개) */
+  defaultLess(elem, line) {
+    if (isArith(elem)) return () => (a, b) => a < b;
+    if (elem.k === "string") return () => (a, b) => strCompare(a, b) < 0;
+    if (isStruct(elem) && elem.isPair) {
+      const [A, B] = elem.fields.map((x) => x.type);
+      const ua = cells(A);
+      const la = this.defaultLess(A, line);
+      const lb = this.defaultLess(B, line);
+      const part = (v, t, from, n) => (n === 1 && !isStruct(t) ? v[from] : v.slice(from, from + n));
+      return (f) => {
+        const x = la(f);
+        const y = lb(f);
+        return (a, b) => {
+          const a1 = part(a, A, 0, ua);
+          const b1 = part(b, A, 0, ua);
+          if (x(a1, b1)) return true;
+          if (x(b1, a1)) return false;
+          return y(part(a, B, ua, cells(B)), part(b, B, ua, cells(B)));
+        };
+      };
+    }
+    if (isStruct(elem)) return this.binaryFn(elem, "<", line, `${typeName(elem)}에는 < 연산자가 없어서 크기를 비교할 수 없어요`,
+      `bool operator<(const ${typeName(elem)} &o) const { … } 를 만들거나, 비교 함수(람다)를 넣어 주세요.`);
+    throw compileError(line, `${friendlyType(elem)}는 크기를 비교할 수 없어요`);
+  }
+
+  /** a == b 를 계산하는 함수 */
+  defaultEq(elem, line) {
+    if (isArith(elem)) return () => (a, b) => a === b;
+    if (elem.k === "string") return () => (a, b) => strCompare(a, b) === 0;
+    if (isStruct(elem) && elem.isPair) {
+      const less = this.defaultLess(elem, line);
+      return (f) => { const l = less(f); return (a, b) => !l(a, b) && !l(b, a); };
+    }
+    if (isStruct(elem)) return this.binaryFn(elem, "==", line, `${typeName(elem)}에는 == 연산자가 없어서 같은지 비교할 수 없어요`,
+      `bool operator==(const ${typeName(elem)} &o) const { … } 를 만들어 주세요.`);
+    throw compileError(line, `${friendlyType(elem)}는 같은지 비교할 수 없어요`);
+  }
+
+  /** 사용자 연산자로 두 원소 값을 계산하는 함수 */
+  binaryFn(elem, op, line, title, detail) {
+    const n = cells(elem);
+    const holders = [null, null];
+    const fakes = holders.map((_, k) => this.withLoad({ t: elem, lv: () => holders[k], isConst: true }, line));
+    const U = this.userOp(op, fakes, [{ k: "fake", line }, { k: "fake", line }], line);
+    if (!U) throw compileError(line, title, detail);
+    const box = (v) => { const st = new Store(n, "원소", elem); st.cells = n === 1 && !isStruct(elem) ? [v] : v.slice(); return new Ptr(st, 0); };
+    return (f) => (a, b) => { holders[0] = box(a); holders[1] = box(b); return truthy(U.ev(f)); };
+  }
+
+  /** 사용자가 넣은 함수(람다, 함수 이름)를 원소 값들로 부르는 함수. count개의 원소를 받아요 */
+  userFn(elem, node, count, line, what) {
+    const rt = this.rt;
+    const C = this.value(this.expr(node), line);
+    let ftype;
+    if (C.t.k === "lambda") ftype = C.t.ftype;
+    else if (isFuncPtr(C.t)) ftype = C.t.to;
+    else throw compileError(line, `${what} 자리에는 함수나 람다가 와야 해요`, "예: [](int a, int b) { return a > b; }");
+    const n = cells(elem);
+    const holders = new Array(count).fill(null);
+    const fakes = holders.map((_, k) => this.withLoad({ t: elem, lv: () => holders[k] }, line));
+    let cur = null;
+    const call = this.callWith(ftype, { line, args: holders.map(() => ({ k: "fake", line })) }, what,
+      (f, vals, used, types) => (cur && cur.lambda ? cur.call(vals) : rt.callFn(cur, vals, line, used, types)), null, fakes);
+    const box = (v) => { const st = new Store(n, "원소", elem); st.cells = n === 1 && !isStruct(elem) ? [v] : v.slice(); return new Ptr(st, 0); };
+    return (f) => {
+      const fn = C.ev(f);
+      return (...vs) => {
+        cur = fn;
+        vs.forEach((v, k) => { holders[k] = box(v); });
+        return truthy(call.ev(f));
+      };
+    };
+  }
+
+  /** pair 비교: first 먼저, 같으면 second */
+  pairCompare(op, L, R, line) {
+    const less = this.defaultLess(L.t, line);
+    return {
+      t: T.bool,
+      ev: (f) => {
+        const lt = less(f);
+        const a = L.ev(f);
+        const b = R.ev(f);
+        const r = { "<": lt(a, b), ">": lt(b, a), "<=": !lt(b, a), ">=": !lt(a, b), "==": !lt(a, b) && !lt(b, a), "!=": lt(a, b) || lt(b, a) }[op];
+        return r ? 1 : 0;
+      },
+    };
+  }
+
+  /** sort, reverse, find, count, accumulate, max_element … */
+  stdAlgo(name, node) {
+    const { line } = node;
+    const rt = this.rt;
+    const args = node.args;
+    if (name === "make_pair") {
+      if (args.length !== 2) throw compileError(line, "make_pair에는 값 두 개를 넣어요");
+      const [A, B] = args.map((a) => this.value(this.expr(a), line));
+      const decay = (t) => (isPtr(t) && isCharLike(t.to) ? t : t);
+      const type = this.pairOf(decay(A.t), decay(B.t));
+      const flat = (V, v) => (isStruct(V.t) ? v : [v]);
+      return { t: type, ev: (f) => [...flat(A, A.ev(f)), ...flat(B, B.ev(f))] };
+    }
+    if (!this.hasHeader("algorithm") && !this.hasHeader("numeric")) this.needHeader(name === "accumulate" ? "numeric" : "algorithm", `std::${name}`, line);
+    const want = (min, max) => {
+      if (args.length < min || args.length > max) throw compileError(line, `${name}에는 값 ${min === max ? min : `${min}~${max}`}개를 넣어요`, `예: ${name}(v.begin(), v.end()${min > 2 ? ", …" : ""})`);
+    };
+    const iter = (i) => {
+      const P = this.value(this.expr(args[i]), line);
+      if (!isPtr(P.t)) throw compileError(line, `${name}의 ${i + 1}번째 값은 위치(반복자)예요`, "예: v.begin(), v.end(), 또는 배열 a, a + n");
+      return P;
+    };
+    want(2, 4);
+    const First = iter(0);
+    const Last = iter(1);
+    const elem = this.need(First.t.to, line);
+    if (!sameType(elem, Last.t.to)) throw compileError(line, `${name}의 처음과 끝 위치의 타입이 달라요`);
+    const unit = cells(elem);
+    const multi = unit > 1 || isStruct(elem);
+    const range = (f) => {
+      const p = First.ev(f);
+      const q = Last.ev(f);
+      if (p === null || q === null) throw runtimeError(line, `${name}에 NULL 위치를 넣었어요`);
+      if (p.store !== q.store) throw runtimeError(line, `${name}의 처음과 끝이 서로 다른 배열(vector)을 가리켜요`, "v.begin(), v.end() 처럼 같은 것의 위치를 넣어요.");
+      const n = (q.off - p.off) / unit;
+      if (n < 0) throw runtimeError(line, `${name}의 처음 위치가 끝 위치보다 뒤에 있어요`);
+      if (n > 0) { rt.check(p, line, false); rt.check(new Ptr(p.store, q.off - 1), line, false); }
+      return { st: p.store, off: p.off, n, end: q };
+    };
+    const get = (r, i) => (multi ? r.st.cells.slice(r.off + i * unit, r.off + (i + 1) * unit) : r.st.cells[r.off + i]);
+    const put = (r, i, v) => { if (multi) for (let k = 0; k < unit; k++) r.st.cells[r.off + i * unit + k] = v[k]; else r.st.cells[r.off + i] = v; };
+    const at = (r, i) => new Ptr(r.st, r.off + i * unit);
+    const valueArg = (i) => {
+      const V = this.conv(this.value(this.expr(args[i]), line), elem, line, `${name}의 값`);
+      return V.ev;
+    };
+    switch (name) {
+      case "sort": case "stable_sort": {
+        want(2, 3);
+        const less = !args[2] ? this.defaultLess(elem, line)
+          : args[2].k === "cmpobj" ? ((l) => (args[2].dir === "greater" ? (f) => { const g = l(f); return (a, b) => g(b, a); } : l))(this.defaultLess(elem, line))
+            : this.userFn(elem, args[2], 2, line, "sort의 비교 함수");
+        return {
+          t: T.void,
+          ev: (f) => {
+            const r = range(f);
+            const lt = less(f);
+            const vals = [];
+            for (let i = 0; i < r.n; i++) vals.push(get(r, i));
+            vals.sort((a, b) => (lt(a, b) ? -1 : lt(b, a) ? 1 : 0));
+            vals.forEach((v, i) => put(r, i, v));
+          },
+        };
+      }
+      case "reverse":
+        want(2, 2);
+        return { t: T.void, ev: (f) => { const r = range(f); const vals = []; for (let i = 0; i < r.n; i++) vals.push(get(r, i)); vals.reverse().forEach((v, i) => put(r, i, v)); } };
+      case "fill": {
+        want(3, 3);
+        const V = valueArg(2);
+        return { t: T.void, ev: (f) => { const r = range(f); const v = V(f); for (let i = 0; i < r.n; i++) put(r, i, multi ? cloneCells(elem, v) : cloneValue(elem, v)); } };
+      }
+      case "find": case "count": case "binary_search": {
+        want(3, 3);
+        const V = valueArg(2);
+        const eq = this.defaultEq(elem, line);
+        return {
+          t: name === "find" ? ptr(elem) : name === "count" ? T.long : T.bool,
+          ev: (f) => {
+            const r = range(f);
+            const v = V(f);
+            const same = eq(f);
+            let c = 0;
+            for (let i = 0; i < r.n; i++) {
+              if (same(get(r, i), v)) {
+                if (name === "find") return at(r, i);
+                if (name === "binary_search") return 1;
+                c++;
+              }
+            }
+            return name === "find" ? r.end : name === "count" ? BigInt(c) : 0;
+          },
+        };
+      }
+      case "find_if": case "count_if": {
+        want(3, 3);
+        const pred = this.userFn(elem, args[2], 1, line, `${name}의 조건 함수`);
+        return {
+          t: name === "find_if" ? ptr(elem) : T.long,
+          ev: (f) => {
+            const r = range(f);
+            const ok = pred(f);
+            let c = 0;
+            for (let i = 0; i < r.n; i++) {
+              if (ok(get(r, i))) {
+                if (name === "find_if") return at(r, i);
+                c++;
+              }
+            }
+            return name === "find_if" ? r.end : BigInt(c);
+          },
+        };
+      }
+      case "max_element": case "min_element": {
+        want(2, 3);
+        const less = args[2] ? this.userFn(elem, args[2], 2, line, `${name}의 비교 함수`) : this.defaultLess(elem, line);
+        return {
+          t: ptr(elem),
+          ev: (f) => {
+            const r = range(f);
+            if (r.n === 0) return r.end;
+            const lt = less(f);
+            let best = 0;
+            for (let i = 1; i < r.n; i++) {
+              if (name === "max_element" ? lt(get(r, best), get(r, i)) : lt(get(r, i), get(r, best))) best = i;
+            }
+            return at(r, best);
+          },
+        };
+      }
+      case "accumulate": {
+        want(3, 3);
+        const Init = this.value(this.expr(args[2]), line);
+        let accV;
+        let elemV;
+        const accE = { t: Init.t, ev: () => accV };
+        const elemE = { t: elem, ev: () => elemV };
+        if (!isArith(Init.t) && Init.t.k !== "string") throw compileError(line, "accumulate의 처음 값은 숫자나 string이에요");
+        const S = this.conv(this.binaryValues("+", accE, elemE, line), Init.t, line, "accumulate의 합");
+        return {
+          t: Init.t,
+          ev: (f) => {
+            const r = range(f);
+            accV = Init.ev(f);
+            for (let i = 0; i < r.n; i++) { elemV = get(r, i); accV = S.ev(f); }
+            return accV;
+          },
+        };
+      }
+      default:
+        throw compileError(line, `std::${name}는 아직 없어요`);
+    }
   }
 
   // ---------- C++ 2단계: std::string, std::vector ----------
@@ -1681,10 +2120,23 @@ export class Compiler {
       throw compileError(opts.line ?? t.line, "auto는 처음 값이 있는 변수에만 쓸 수 있어요", "예: auto x = 3.5;");
     }
     if (t.k === "ptr") {
-      const out = isStruct(t.to) ? ptr(t.to) : ptr(this.resolveType(t.to, { param: opts.param, allowVla: opts.allowVla, inner: true, line: opts.line }));
+      const out = isStruct(t.to) && !t.to.tmplPattern ? ptr(t.to) : ptr(this.resolveType(t.to, { param: opts.param, allowVla: opts.allowVla, inner: true, line: opts.line }));
       if (t.toConst) out.toConst = true;
       return out;
     }
+    if (t.k === "tparam") {
+      const v = this.tsubst && this.tsubst.get(t.name);
+      if (!v) throw compileError(opts.line ?? t.line, `템플릿 타입 ${t.name}가 아직 정해지지 않았어요`);
+      return v;
+    }
+    if (t.k === "tinst") return this.instantiateClass(t.tmpl, t.args.map((a) => this.resolveType(a, { line: t.line ?? opts.line })), t.line ?? opts.line);
+    if (t.k === "struct" && t.tmplPattern) {
+      // 클래스 템플릿 안에서 쓴 자기 이름(Box)은 지금 만드는 Box<int>예요
+      const tm = t.tmplPattern;
+      if (!this.tsubst || tm.params.some((q) => !this.tsubst.has(q.name))) throw compileError(opts.line ?? t.line, `${tm.name}는 템플릿이라 ${tm.name}<타입> 처럼 써요`);
+      return this.instantiateClass(tm, tm.params.map((q) => this.tsubst.get(q.name)), opts.line ?? t.line);
+    }
+    if (t.k === "pair") return this.pairOf(this.resolveType(t.a, { line: t.line }), this.resolveType(t.b, { line: t.line }));
     if (t.k === "struct") return this.layout(t, opts.line ?? t.line);
     if (t.k === "func") {
       const ret = this.resolveType(t.ret);
@@ -1901,6 +2353,8 @@ export class Compiler {
       case "member": return this.member(node);
       case "vaarg": return this.vaArg(node);
       case "new": return this.newExpr(node);
+      case "lambda": return this.lambdaExpr(node);
+      case "cmpobj": throw compileError(line, `${node.dir}<…>() 는 sort 같은 함수의 비교 자리에만 쓸 수 있어요`);
       case "construct": {
         const type = this.resolveType(node.type, { line });
         if (isStruct(type)) {
@@ -1949,6 +2403,13 @@ export class Compiler {
         } else if (A.isNull && isPtr(B.t)) {
           t = B.t;
           a = this.conv(A, t, line);
+        } else if (this.cpp && (isObj(A.t) || isObj(B.t))) {
+          // string ? "글자" : string 처럼 한쪽이 string이면 string으로 맞춰요
+          t = isObj(A.t) ? A.t : B.t;
+          a = this.conv(A, t, line);
+          b = this.conv(B, t, line);
+        } else if (this.cpp && sameType(A.t, B.t)) {
+          t = A.t;
         } else {
           throw compileError(line, "? : 의 두 값의 종류가 달라요", `${friendlyType(A.t)}와 ${friendlyType(B.t)}는 함께 쓸 수 없어요.`);
         }
@@ -2230,6 +2691,7 @@ export class Compiler {
     const L = this.value(this.expr(node.l), line);
     if (L.t.k === "stream") return this.streamOp(node, L);
     const R = this.value(this.expr(node.r), line);
+    if (this.cpp && isStruct(L.t) && L.t.isPair && sameType(L.t, R.t) && op in COMPARE) return this.pairCompare(op, L, R, line);
     if (this.cpp && (isStruct(L.t) || isStruct(R.t))) {
       const E = this.userOp(op, [L, R], [node.l, node.r], line);
       if (E) return E;
@@ -2602,6 +3064,7 @@ export class Compiler {
         if (MANIP_MAKERS[name]) this.stdIdentifier(name, line); // using이 없다고 알려 줘요
         if (base === "min" || base === "max") return this.stdMinMax(base, node);
         if (base === "swap") return this.stdSwap(node);
+        if (base !== null && ALGOS.has(base)) return this.stdAlgo(base, node);
         if (STR_FUNCS.has(base)) return this.stdStrFunc(base, node);
         if (base === null && STR_FUNCS.has(name)) {
           throw compileError(line, `'${name}'는 std::${name}이에요`, `맨 위에 using namespace std; 를 넣거나 std::${name} 처럼 써요.`);
@@ -2618,7 +3081,9 @@ export class Compiler {
       }
       if (!info) {
         const user = this.funcs.get(name);
-        if (user) return this.callUser(user, node);
+        if (user && !node.callee.targs) return this.callUser(user, node);
+        const tl = this.cpp ? this.templates.get(name) : null;
+        if (tl && tl[0].kind === "func") return this.callTemplate(tl, node, node.callee.targs);
         const b = BUILTINS[name];
         if (b) return this.callBuiltin(name, b, node);
         const all = [...this.funcs.keys(), ...Object.keys(BUILTINS).filter((n) => this.hasHeader(BUILTINS[n].header))];
@@ -2628,6 +3093,10 @@ export class Compiler {
     }
     // 함수 포인터로 부르기: fp(1, 2), (*fp)(1, 2), ops[i](1, 2)
     const C = this.value(this.expr(node.callee), line);
+    if (C.t.k === "lambda") {
+      const lev = C.ev;
+      return this.callWith(C.t.ftype, node, "람다", (f, vals) => lev(f).call(vals));
+    }
     if (this.cpp && isStruct(C.t)) {
       const raws = [C, ...node.args.map((a) => this.expr(a))];
       const U = this.userOp("()", raws, [node.callee, ...node.args], line);
@@ -3670,7 +4139,14 @@ export class Compiler {
         if (this.loops === 0) throw compileError(line, "continue는 반복문 안에서만 쓸 수 있어요");
         return () => CONTINUE;
       case "return": {
-        const ret = this.fn.type.ret;
+        let ret = this.lambda ? this.lambda.ftype.ret : this.fn.type.ret;
+        if (ret.k === "autoRet") {
+          // 람다: 처음 나온 return 의 값으로 돌려주는 타입을 정해요
+          if (!node.e) ret = T.void;
+          else if (node.e.k === "initlist") throw compileError(line, "람다에서 { } 를 돌려주려면 -> 타입 을 적어 주세요");
+          else ret = this.value(this.expr(node.e), line).t;
+          this.lambda.ftype.ret = ret;
+        }
         if (!node.e) {
           if (!isVoid(ret)) throw compileError(line, `함수 '${this.fn.name}'는 값을 돌려줘야 해요`, `return 뒤에 돌려줄 값을 써 주세요. 예: return 0;`);
           return () => { rt.ret = undefined; return RETURN; };
@@ -3802,6 +4278,7 @@ export class Compiler {
     for (const t of Object.values(this.builtinTypes)) if (isStruct(t)) this.layout(t, 0);
     this.rt.builtinTypes = this.builtinTypes;
     if (this.cpp) this.registerClasses(ast.classes || []);
+    if (this.cpp && ast.templates) this.templates = ast.templates;
     // 함수 이름을 먼저 모두 등록해서, 뒤에 만든 함수도 부를 수 있게 해요.
     for (const item of ast.items) {
       if (item.k !== "func") continue;
@@ -3818,6 +4295,8 @@ export class Compiler {
         this.staticAssert(item);
       } else if (item.k === "using") {
         this.usingDecl(item);
+      } else if (item.k === "template") {
+        // 템플릿은 쓰일 때 타입마다 만들어요
       } else {
         this.declaration(item, true);
         // 클래스 안에서 몸통까지 만든 멤버 함수들은 클래스가 나온 자리에서 컴파일해요

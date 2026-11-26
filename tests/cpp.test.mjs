@@ -75,7 +75,7 @@ test("C++ 모드: 아직 없는 기능은 단계와 함께 안내해요", () => 
     ["#include <map>\nint main() {}", /<map>.*다음 단계/],
     ["#include <iostream>\nusing namespace std;\nint main() { map<int, int> m; }", /std::map.*5단계/],
     ["struct A { virtual void f() {} };\nint main() {}", /'virtual'.*6단계/],
-    ["int main() { template <typename T> int x; }", /'template'.*5단계/],
+    ["#include <iostream>\nint main() { std::map<int, int> m; }", /std::map.*5단계/],
     ["int main() { try { } catch (int e) { } }", /'try'.*6단계/],
   ];
   for (const [code, pattern] of cases) {
@@ -339,17 +339,48 @@ for (const [name, code, want, inputs] of STAGE4) {
   });
 }
 
+
+// ---------- 5단계 (앞부분): 템플릿, 람다, pair, 알고리즘 ----------
+const H5 = "#include <iostream>\n#include <string>\n#include <vector>\n#include <algorithm>\n#include <numeric>\nusing namespace std;\n";
+const STAGE5A = [
+  ["함수 템플릿", H5 + "template <typename T> T biggest(T a, T b) { return a > b ? a : b; }\nint main() { cout << biggest(3, 7) << \" \" << biggest(2.5, 1.5) << \" \" << biggest('a', 'z') << \" \" << biggest(string(\"ab\"), string(\"b\")) << endl; }", "7 2.5 z b\n"],
+  ["템플릿 타입 직접", H5 + "template <typename T> T half(T x) { return x / 2; }\nint main() { cout << half(7) << \" \" << half<double>(7) << endl; }", "3 3.5\n"],
+  ["템플릿 T 충돌", H5 + "template <typename T> T biggest(T a, T b) { return a > b ? a : b; }\nint main() { cout << biggest(1, 2.5); }", "ERR"],
+  ["vector<T> 템플릿", H5 + "template <typename T> T sumAll(const vector<T> &v) { T s = 0; for (const T &x : v) s += x; return s; }\nint main() { vector<int> a = {1, 2, 3}; vector<double> b = {0.5, 0.25}; cout << sumAll(a) << \" \" << sumAll(b) << endl; }", "6 0.75\n"],
+  ["템플릿 두 타입", H5 + "template <typename A, typename B> void show(A a, B b) { cout << a << \"/\" << b << endl; }\nint main() { show(1, \"x\"); show(2.5, 'c'); }", "1/x\n2.5/c\n"],
+  ["클래스 템플릿", H5 + "template <typename T>\nclass Box {\n  T value;\npublic:\n  Box(T v) : value(v) {}\n  T get() const { return value; }\n  void set(T v) { value = v; }\n};\nint main() { Box<int> a(3); Box<string> b(\"hi\"); a.set(a.get() * 2); cout << a.get() << b.get() << endl; }", "6hi\n"],
+  ["클래스 템플릿 자기 이름", H5 + "template <typename T>\nstruct Pair2 {\n  T a, b;\n  Pair2 swapped() const { return Pair2{b, a}; }\n};\nint main() { Pair2<int> p{1, 2}; Pair2<int> q = p.swapped(); cout << q.a << q.b << endl; }", "21\n"],
+  ["템플릿 스택", H5 + "template <typename T>\nclass Stack {\n  vector<T> data;\npublic:\n  void push(const T &x) { data.push_back(x); }\n  T pop() { T x = data.back(); data.pop_back(); return x; }\n  bool empty() const { return data.empty(); }\n};\nint main() { Stack<string> s; s.push(\"a\"); s.push(\"b\"); while (!s.empty()) cout << s.pop(); cout << endl; }", "ba\n"],
+  ["sort 기본", H5 + "int main() { vector<int> v = {5, 2, 8, 1}; sort(v.begin(), v.end()); for (int x : v) cout << x; cout << endl; }", "1258\n"],
+  ["sort 배열, greater", H5 + "int main() { int a[] = {3, 1, 2}; sort(a, a + 3, greater<int>()); for (int x : a) cout << x; cout << endl; }", "321\n"],
+  ["sort 람다", H5 + "int main() { vector<string> w = {\"ccc\", \"a\", \"bb\"}; sort(w.begin(), w.end(), [](const string &x, const string &y) { return x.size() < y.size(); }); for (auto &s : w) cout << s << \" \"; cout << endl; }", "a bb ccc \n"],
+  ["sort 함수 이름", H5 + "bool desc(int a, int b) { return a > b; }\nint main() { vector<int> v = {1, 3, 2}; sort(v.begin(), v.end(), desc); cout << v[0] << v[1] << v[2] << endl; }", "321\n"],
+  ["sort 구조체 operator<", H5 + "struct S { string name; int score; bool operator<(const S &o) const { return score > o.score; } };\nint main() { vector<S> v = {{\"a\", 1}, {\"b\", 3}, {\"c\", 2}}; sort(v.begin(), v.end()); for (auto &s : v) cout << s.name; cout << endl; }", "bca\n"],
+  ["sort 구조체 < 없음", H5 + "struct S { int x; };\nint main() { vector<S> v = {{1}}; sort(v.begin(), v.end()); }", "ERR"],
+  ["sort string", H5 + "int main() { vector<string> v = {\"banana\", \"apple\", \"cherry\"}; sort(v.begin(), v.end()); cout << v[0] << v[2] << endl; }", "applecherry\n"],
+  ["reverse, find, count", H5 + "int main() { vector<int> v = {1, 2, 3, 2}; reverse(v.begin(), v.end()); cout << v[0]; auto it = find(v.begin(), v.end(), 3); cout << (it - v.begin()) << count(v.begin(), v.end(), 2) << (find(v.begin(), v.end(), 9) == v.end()) << endl; }", "2121\n"],
+  ["max_element, min_element", H5 + "int main() { vector<int> v = {4, 9, 1}; cout << *max_element(v.begin(), v.end()) << *min_element(v.begin(), v.end()) << (max_element(v.begin(), v.end()) - v.begin()) << endl; }", "911\n"],
+  ["accumulate", H5 + "int main() { vector<int> v = {1, 2, 3}; vector<string> w = {\"a\", \"b\"}; cout << accumulate(v.begin(), v.end(), 0) << accumulate(w.begin(), w.end(), string(\"\")) << accumulate(v.begin(), v.end(), 0.5) << endl; }", "6ab6.5\n"],
+  ["count_if, find_if 람다", H5 + "int main() { vector<int> v = {1, 4, 6, 7}; int limit = 5; cout << count_if(v.begin(), v.end(), [&](int x) { return x > limit; }); cout << *find_if(v.begin(), v.end(), [](int x) { return x % 2 == 0; }) << endl; }", "24\n"],
+  ["fill", H5 + "int main() { vector<int> v(3); fill(v.begin(), v.end(), 7); cout << v[0] + v[2] << endl; }", "14\n"],
+  ["람다 변수와 캡처", H5 + "int main() { int total = 0; auto add = [&](int x) { total += x; }; add(3); add(4); auto sq = [](int x) { return x * x; }; cout << total << sq(5) << endl; }", "725\n"],
+  ["람다 -> 타입", H5 + "int main() { auto f = [](int a, int b) -> double { return a / 2.0 + b; }; cout << f(3, 1) << endl; }", "2.5\n"],
+  ["pair 기본", H5 + "int main() { pair<string, int> p = {\"민지\", 90}; pair<int, int> q(1, 2); auto r = make_pair(3, 'x'); cout << p.first << p.second << q.second << r.first << r.second << endl; }", "민지90 23x\n".replace(" ", "")],
+  ["pair 정렬", H5 + "int main() { vector<pair<int, string>> v = {{2, \"b\"}, {1, \"z\"}, {2, \"a\"}}; sort(v.begin(), v.end()); for (auto &p : v) cout << p.first << p.second << \" \"; cout << (v[0] < v[1]) << endl; }", "1z 2a 2b 1\n"],
+  ["템플릿 + 람다 인자", H5 + "template <typename F> int applyTwice(F f, int x) { return f(f(x)); }\nint main() { cout << applyTwice([](int v) { return v * 3; }, 2) << endl; }", "18\n"],
+  ["알고리즘 헤더 없음", "#include <iostream>\n#include <vector>\nusing namespace std;\nint main() { vector<int> v; sort(v.begin(), v.end()); }", "ERR"],
+  ["템플릿 목표", "#include <iostream>\n#include <vector>\n#include <algorithm>\ntemplate <typename T> T biggest(T a, T b) { return a > b ? a : b; }\nint main() {\n    std::vector<int> v = {3, 1, 2};\n    std::sort(v.begin(), v.end());\n    std::cout << v[0] << v[1] << v[2] << \" \" << biggest(2.5, 1.5) << \"\\n\";\n}", "123 2.5\n"],
+];
+for (const [name, code, want, inputs] of STAGE5A) {
+  test(`C++ 5단계: ${name}`, () => {
+    const r = run(code, inputs);
+    if (want === "ERR") assert.equal(r.status, "error", r.out);
+    else ok(code, want, inputs);
+  });
+}
+
 // ---------- 앞으로의 단계: 목표 프로그램 ----------
 const TODO = [
-  [5, "템플릿과 sort", `#include <iostream>
-#include <vector>
-#include <algorithm>
-template <typename T> T biggest(T a, T b) { return a > b ? a : b; }
-int main() {
-    std::vector<int> v = {3, 1, 2};
-    std::sort(v.begin(), v.end());
-    std::cout << v[0] << v[1] << v[2] << " " << biggest(2.5, 1.5) << "\\n";
-}`, "123 2.5\n"],
   [6, "상속, 가상 함수, 예외", `#include <iostream>
 #include <stdexcept>
 struct Shape { virtual double area() const = 0; virtual ~Shape() {} };

@@ -15,26 +15,26 @@ export const CPP_C_HEADERS = {
 };
 
 // C++ 표준 라이브러리 헤더: C++ 도입 단계에서 하나씩 만들 예정이에요 (design/cpp-plan.md)
-export const CPP_LIBRARY_HEADERS = new Set([ "algorithm", "map", "set", "unordered_map", "unordered_set", "queue", "stack",
-  "deque", "list", "utility", "sstream", "fstream", "memory", "functional", "numeric", "array", "tuple", "stdexcept",
+export const CPP_LIBRARY_HEADERS = new Set([ "map", "set", "unordered_map", "unordered_set", "queue", "stack",
+  "deque", "list", "sstream", "fstream", "memory", "array", "tuple", "stdexcept",
 ]);
 
 /** 지금 쓸 수 있는 C++ 헤더 */
-export const CPP_READY_HEADERS = new Set(["iostream", "iomanip", "ios", "ostream", "istream", "string", "vector"]);
+export const CPP_READY_HEADERS = new Set(["iostream", "iomanip", "ios", "ostream", "istream", "string", "vector", "algorithm", "numeric", "utility", "functional"]);
 
 /** std:: 안에서 아직 준비 중인 이름과 그 단계 */
 export const STD_LATER = {
-  map: 5, set: 5, pair: 5, make_pair: 5, sort: 5, reverse: 5, unordered_map: 5, unordered_set: 5, queue: 5,
-  stack: 5, deque: 5, list: 5, array: 5, priority_queue: 5, tuple: 5, find: 5, count: 5, accumulate: 5,
+  map: 5, set: 5, unordered_map: 5, unordered_set: 5, queue: 5,
+  stack: 5, deque: 5, list: 5, array: 5, priority_queue: 5, tuple: 5,
   runtime_error: 6, exception: 6, logic_error: 6, out_of_range: 6, invalid_argument: 6,
 };
-const STD_TYPES = new Set(["map", "set", "pair", "unordered_map", "unordered_set", "queue", "stack",
+const STD_TYPES = new Set(["map", "set", "unordered_map", "unordered_set", "queue", "stack",
   "deque", "list", "array", "priority_queue", "tuple"]);
 
 // 아직 준비 중인 C++ 낱말들과 그 단계
 export const CPP_PENDING = {
   virtual: 6,
-  template: 5, typename: 5, try: 6, catch: 6, throw: 6, decltype: 5, dynamic_cast: 6,
+  try: 6, catch: 6, throw: 6, decltype: 5, dynamic_cast: 6,
 };
 
 const PUNCTUATORS = [
@@ -519,7 +519,7 @@ export function tokenize(src, { dialect = "c" } = {}) {
         return;
       }
       if (cpp && CPP_READY_HEADERS.has(m[1])) {
-        includes.add(["iomanip", "string", "vector"].includes(m[1]) ? m[1] : "iostream");
+        includes.add(["iomanip", "string", "vector", "algorithm", "numeric", "utility", "functional"].includes(m[1]) ? m[1] : "iostream");
         return;
       }
       if (cpp && CPP_C_HEADERS[m[1]]) m[1] = CPP_C_HEADERS[m[1]];
