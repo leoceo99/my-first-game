@@ -246,6 +246,26 @@ class Parser {
     const key = `${kw.v === "class" ? "struct" : kw.v} ${tag}`; // class A 와 struct A 는 같은 것
     let t = tag ? this.tags.get(key) : null;
     const fresh = () => ({ k: "struct", tag, isUnion, fields: [], complete: false, line: kw.line });
+    let bases = [];
+    if (this.cpp && !isUnion && this.is(":")) {
+      // 상속: class Dog : public Animal
+      this.next();
+      do {
+        let access = kw.v === "class" ? "private" : "public";
+        while (["public", "protected", "private", "virtual"].includes(this.cur.v)) {
+          const w = this.next().v;
+          if (w !== "virtual") access = w;
+        }
+        const nameTok = this.next();
+        if (nameTok.k !== "id" || !this.isTypedefName(nameTok.v)) {
+          throw compileError(nameTok.line, `부모 클래스 '${show(nameTok)}'를 찾을 수 없어요`, "부모 클래스는 자식 클래스보다 먼저(위에) 만들어요.");
+        }
+        let type = this.typedefType(nameTok.v);
+        if (type.k === "tmplref") type = this.templateArgs(type.tmpl, nameTok.line);
+        bases.push({ type, access, line: nameTok.line });
+      } while (this.accept(","));
+      if (!this.is("{")) throw compileError(this.cur.line, "부모 클래스 다음에는 { 가 와요");
+    }
     if (!this.is("{")) {
       if (!tag) throw compileError(kw.line, `${kw.v} 뒤에 이름이나 { 가 필요해요`);
       if (!t) {
@@ -264,7 +284,10 @@ class Parser {
       }
     }
     this.next();
-    if (this.cpp && !isUnion) return this.classBody(t, kw);
+    if (this.cpp && !isUnion) {
+      t.bases = bases;
+      return this.classBody(t, kw);
+    }
     const fields = [];
     while (!this.is("}")) {
       if (this.cur.k === "eof") throw compileError(kw.line, `${kw.line}번째 줄의 struct { 가 닫히지 않았어요`);
@@ -305,12 +328,15 @@ class Parser {
     const friends = [];
     t.isClass = kw.v === "class";
     t.qname = tag ? this.nsName(tag) : null;
+    let override = false;
     const qualifiers = () => {
       // 매개변수 뒤의 const, noexcept, override …
       let isConst = false;
+      override = false;
       for (;;) {
         if (this.accept("const")) isConst = true;
-        else if (this.is("noexcept") || this.is("override") || this.is("final")) this.next();
+        else if (this.accept("override")) override = true;
+        else if (this.is("noexcept") || this.is("final")) this.next();
         else return isConst;
       }
     };
@@ -320,7 +346,10 @@ class Parser {
         const what = this.next();
         if (what.v === "default") m.defaulted = true;
         else if (what.v === "delete") m.deleted = true;
-        else throw compileError(what.line, "= 0 (순수 가상 함수)은 C++ 6단계에서 지원해요");
+        else if (what.k === "num" && what.value === 0) {
+          if (!m.isVirtual) throw compileError(what.line, "= 0 은 virtual 함수에만 붙여요", `예: virtual double area() const = 0;`);
+          m.pure = true; // 순수 가상 함수: 자식 클래스가 꼭 만들어야 해요
+        } else throw compileError(what.line, "함수 뒤의 = 에는 0, default, delete 만 올 수 있어요");
         this.expect(";");
         return m;
       }
@@ -351,14 +380,17 @@ class Parser {
         friends.push(fr);
         continue;
       }
-      while (this.is("explicit") || this.is("inline")) this.next();
+      let isVirtual = false;
+      while (this.is("explicit") || this.is("inline") || this.is("virtual")) {
+        if (this.next().v === "virtual") isVirtual = true;
+      }
       if (this.is("~")) {
         this.next();
         const name = this.next();
         if (name.v !== tag) throw compileError(line, `소멸자 이름은 ~${tag} 이어야 해요`);
         const ps = this.params();
         qualifiers();
-        methods.push(body({ kind: "dtor", name: `~${tag}`, params: ps, access, line }));
+        methods.push(body({ kind: "dtor", name: `~${tag}`, params: ps, access, line, isVirtual, override }));
         continue;
       }
       if (tag && this.cur.k === "id" && this.cur.v === tag && this.is("(", this.peek())) {
@@ -382,7 +414,8 @@ class Parser {
         const d = this.declarator(specs.type, false, specs.isConst);
         if (d.type.k === "func") {
           const isConst = qualifiers();
-          const m = { kind: "method", name: d.name, type: d.type, isConst, isStatic: specs.storage === "static", access, line: d.line };
+          const m = { kind: "method", name: d.name, type: d.type, isConst, isStatic: specs.storage === "static", access, line: d.line, isVirtual, override };
+          if (isVirtual && m.isStatic) throw compileError(d.line, "static 함수는 virtual로 만들 수 없어요");
           methods.push(body(m));
           ended = true;
           break;
@@ -1024,6 +1057,35 @@ class Parser {
           this.next();
           this.expect(";");
           return { k: "continue", line };
+        case "try": {
+          // try { … } catch (타입 이름) { … } catch (...) { … }
+          this.next();
+          if (!this.is("{")) throw compileError(this.cur.line, "try 다음에는 { 가 와요");
+          const body = this.block();
+          const handlers = [];
+          while (this.accept("catch")) {
+            const hline = this.prev().line;
+            this.expect("(", "catch (const exception &e) 처럼 써요");
+            let decl = null;
+            if (this.accept("...")) decl = null;
+            else {
+              const specs = this.declSpecs();
+              if (!specs) throw compileError(hline, "catch의 괄호 안에는 받을 예외의 타입이 와요", "예: catch (const exception &e), catch (int code), catch (...)");
+              decl = this.declarator(specs.type, true, specs.isConst);
+            }
+            this.expect(")");
+            if (!this.is("{")) throw compileError(this.cur.line, "catch (…) 다음에는 { 가 와요");
+            handlers.push({ decl, body: this.block(), line: hline });
+          }
+          if (!handlers.length) throw compileError(line, "try 뒤에는 catch가 적어도 하나 있어야 해요", "예: catch (const exception &e) { … }");
+          return { k: "try", body, handlers, line };
+        }
+        case "throw": {
+          this.next();
+          const e = this.is(";") ? null : this.expression();
+          this.expect(";");
+          return { k: "throw", e, line };
+        }
         case "return": {
           this.next();
           const e = this.is(";") ? null : this.cpp && this.is("{") ? this.initializer() : this.expression();

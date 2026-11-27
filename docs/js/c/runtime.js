@@ -15,6 +15,11 @@ export class ExitSignal {
 
 const decoderFor = () => new TextDecoder("utf-8");
 
+/** C++ throw: 던진 값(type, 그 값을 담은 Store) */
+export class CppThrow {
+  constructor(type, store) { this.type = type; this.store = store; }
+}
+
 /** longjmp가 setjmp 자리로 돌아갈 때 던지는 신호. */
 export class JumpSignal {
   constructor(ctx, value) { this.ctx = ctx; this.value = value; }
@@ -307,7 +312,7 @@ export class Runtime {
         const f = type.fields.find((x) => last && sameType(x.type, last)) || type.fields[0];
         return `{${f.name}: ${this.formatValue(f.type, store, off + f.off)}} (공용체)`;
       }
-      return `{${type.fields.map((f) => `${f.name}: ${this.formatValue(f.type, store, off + f.off)}`).join(", ")}}`;
+      return `{${type.fields.filter((f) => !f.isVptr).map((f) => `${f.name}: ${this.formatValue(f.type, store, off + f.off)}`).join(", ")}}`;
     }
     if (isArr(type)) {
       if (isCharLike(type.of)) {

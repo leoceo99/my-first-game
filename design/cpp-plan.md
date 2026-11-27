@@ -65,7 +65,19 @@ C++ 코드의 대부분은 C 문법이라서, 단단한 C 실행기가 가장 �
      `vector<int> v(a, a + n)`/`set<int> s(v.begin(), v.end())`, `for (int x : {1, 2, 3})`.
      `unordered_` 컨테이너도 키 순서로 돌아요(진짜 C++은 순서가 정해져 있지 않아요).
    만든 곳: `js/c/compile.js`의 `instantiateFunc`/`instantiateClass`/`lambdaExpr`/`stdAlgo`/`containerMethod`/`mapLookup`.
-6. **상속과 가상 함수, 예외**: `virtual`(객체마다 함수 표), `try`/`catch`/`throw`(JS 예외로 전달)
+6. ✅ **상속과 가상 함수, 예외** (끝남):
+   - 상속: `class Dog : public Animal`, 부모 멤버·함수 물려받기, 부모 생성자에 값 넘기기(`: Animal(n)`), 생성·소멸 순서
+     (부모 → 자식, 없앨 때는 거꾸로), `protected`, 자식 → 부모 포인터·참조, 값으로 자르기(slicing), `static_cast`로 내려가기,
+     여러 부모(`: public A, public B`), 클래스 템플릿을 부모로.
+   - 가상 함수: `virtual`, `override`(틀리면 알려 줘요), 순수 가상 `= 0`과 추상 클래스(객체를 만들면 알려 줘요), 가상 소멸자
+     (`delete 부모포인터`가 자식 소멸자부터 불러요), `Animal::sound()`처럼 부모 함수 직접 부르기, 생성자 안에서는 그 클래스의 함수.
+     객체 안의 숨은 칸에 '실제 클래스'를 적어 두고, 부를 때 그 클래스의 가상 함수 표를 봐요.
+   - 예외: `try`/`catch`(타입, 참조, `...`)/`throw`/`throw;`, 부모 예외 타입으로 받기, 빠져나가는 블록의 소멸자 부르기,
+     `<stdexcept>`의 `exception`, `runtime_error`, `logic_error`, `out_of_range`, `invalid_argument` …(이 앱의 C++로 써 둔 것을 앞에 붙여요),
+     `vector::at`·`map::at`·`stoi`가 진짜 C++처럼 예외를 던져요, 받지 않은 예외는 `what()` 내용과 함께 알려 줘요.
+   - 아직 아닌 것: `dynamic_cast`, `typeid`, 가상 상속, 함수 `try` 블록.
+   만든 곳: `js/c/compile.js`의 `registerClasses`(부모·vtable), `invokeMember`(가상 호출), `tryStatement`/`throwStatement`,
+   `js/c/lexer.js`의 `STD_EXCEPTION_SOURCE`.
 
 ## 변환으로 가는 길
 

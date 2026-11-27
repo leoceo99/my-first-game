@@ -15,23 +15,21 @@ export const CPP_C_HEADERS = {
 };
 
 // C++ 표준 라이브러리 헤더: C++ 도입 단계에서 하나씩 만들 예정이에요 (design/cpp-plan.md)
-export const CPP_LIBRARY_HEADERS = new Set(["list", "sstream", "fstream", "memory", "array", "tuple", "stdexcept"]);
+export const CPP_LIBRARY_HEADERS = new Set(["list", "sstream", "fstream", "memory", "array", "tuple"]);
 
 /** 지금 쓸 수 있는 C++ 헤더 */
 export const CPP_READY_HEADERS = new Set(["iostream", "iomanip", "ios", "ostream", "istream", "string", "vector", "algorithm", "numeric", "utility",
-  "functional", "map", "set", "unordered_map", "unordered_set", "stack", "queue", "deque"]);
+  "functional", "map", "set", "unordered_map", "unordered_set", "stack", "queue", "deque", "stdexcept", "exception"]);
 
 /** std:: 안에서 아직 준비 중인 이름과 그 단계 */
 export const STD_LATER = {
-  list: 6, array: 6, tuple: 6,
-  runtime_error: 6, exception: 6, logic_error: 6, out_of_range: 6, invalid_argument: 6,
+  list: 0, array: 0, tuple: 0,
 };
 const STD_TYPES = new Set(["list", "array", "tuple"]);
 
 // 아직 준비 중인 C++ 낱말들과 그 단계
 export const CPP_PENDING = {
-  virtual: 6,
-  try: 6, catch: 6, throw: 6, decltype: 5, dynamic_cast: 6,
+  decltype: 0, dynamic_cast: 0,
 };
 
 const PUNCTUATORS = [
@@ -361,7 +359,7 @@ function evalCondition(text, line, macros) {
 function cppTokens(tokens) {
   const out = [];
   let usingStd = false;
-  const later = (t, name) => compileError(t.line, `C++의 std::${name}은 아직 준비 중이에요 (C++ ${STD_LATER[name]}단계)`,
+  const later = (t, name) => compileError(t.line, `C++의 std::${name}은 아직 지원하지 않아요${STD_LATER[name] ? ` (C++ ${STD_LATER[name]}단계)` : ""}`,
     "지금은 cout, cin, endl, setw 같은 입출력과 C 방식의 코드를 쓸 수 있어요. 글자 묶음은 char 배열로 써 주세요.");
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
@@ -402,7 +400,7 @@ function cppTokens(tokens) {
         continue;
       }
       if (Object.hasOwn(CPP_PENDING, t.v)) {
-        throw compileError(t.line, `C++의 '${t.v}'는 아직 준비 중이에요 (C++ ${CPP_PENDING[t.v]}단계)`,
+        throw compileError(t.line, `C++의 '${t.v}'는 아직 지원하지 않아요${CPP_PENDING[t.v] ? ` (C++ ${CPP_PENDING[t.v]}단계)` : ""}`,
           "지금 C++ 모드에서는 cout, cin과 C 방식의 코드에 bool, nullptr, 구조체 이름을 타입으로 쓰기를 더해서 쓸 수 있어요.");
       }
       // using namespace std; 뒤의 string s; vector<int> v; 처럼 아직 없는 타입
@@ -413,8 +411,39 @@ function cppTokens(tokens) {
   return out;
 }
 
+/** <stdexcept>, <exception>: std::exception 계열 클래스 (C++로 써 둔 것) */
+const STD_EXCEPTION_SOURCE = `
+namespace std {
+class exception {
+public:
+    exception() {}
+    virtual const char *what() const { return "std::exception"; }
+    virtual ~exception() {}
+};
+class logic_error : public exception {
+    std::string msg_;
+public:
+    logic_error(const std::string &m) : msg_(m) {}
+    const char *what() const override { return msg_.c_str(); }
+};
+class runtime_error : public exception {
+    std::string msg_;
+public:
+    runtime_error(const std::string &m) : msg_(m) {}
+    const char *what() const override { return msg_.c_str(); }
+};
+class out_of_range : public logic_error { public: out_of_range(const std::string &m) : logic_error(m) {} };
+class invalid_argument : public logic_error { public: invalid_argument(const std::string &m) : logic_error(m) {} };
+class length_error : public logic_error { public: length_error(const std::string &m) : logic_error(m) {} };
+class domain_error : public logic_error { public: domain_error(const std::string &m) : logic_error(m) {} };
+class overflow_error : public runtime_error { public: overflow_error(const std::string &m) : runtime_error(m) {} };
+class underflow_error : public runtime_error { public: underflow_error(const std::string &m) : runtime_error(m) {} };
+class range_error : public runtime_error { public: range_error(const std::string &m) : runtime_error(m) {} };
+}
+`;
+
 /** 소스 코드를 전처리하고 토큰 목록을 만들어요. */
-export function tokenize(src, { dialect = "c" } = {}) {
+export function tokenize(src, { dialect = "c", prelude = false } = {}) {
   const cpp = dialect === "cpp";
   const { tokens, directives, lastLine } = rawTokens(src);
   const includes = new Set();
@@ -646,5 +675,11 @@ export function tokenize(src, { dialect = "c" } = {}) {
     throw compileError(conds[conds.length - 1].line, "#if 가 #endif 로 닫히지 않았어요", "끝에 #endif 를 넣어 주세요.");
   }
   out.push({ k: "eof", v: "<끝>", line: lastLine, col: 1 });
+  if (cpp && (includes.has("stdexcept") || includes.has("exception"))) {
+    // <stdexcept>: 표준 예외 클래스들은 이 앱의 C++로 직접 써 둔 것을 맨 앞에 붙여요
+    includes.add("string");
+    const pre = tokenize(STD_EXCEPTION_SOURCE, { dialect: "cpp", prelude: true }).tokens.filter((t) => t.k !== "eof").map((t) => ({ ...t, line: 0 }));
+    return { tokens: [...pre, ...cppTokens(out)], includes };
+  }
   return { tokens: cpp ? cppTokens(out) : out, includes };
 }

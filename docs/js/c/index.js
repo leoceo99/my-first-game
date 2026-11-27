@@ -3,7 +3,7 @@
 import { tokenize } from "./lexer.js";
 import { parse } from "./parser.js";
 import { Compiler } from "./compile.js";
-import { Runtime, NEED_INPUT, ExitSignal } from "./runtime.js";
+import { Runtime, NEED_INPUT, ExitSignal, CppThrow } from "./runtime.js";
 import { CError, runtimeError, typeName, isInt, isFloat, isArr, isPtr, isCharLike, isStruct } from "./types.js";
 
 function kindOf(t) {
@@ -92,7 +92,11 @@ export function runC(source, { answers = [], startTime, files = {}, tzOffset = 0
       return { status: "exit", exitCode: e.code, seconds: seconds(), variables: collectVariables(rt, program), files: rt.fileTexts() };
     }
     let err = e;
-    if (e instanceof RangeError && /call stack/i.test(e.message)) {
+    if (e instanceof CppThrow) {
+      const what = rt.describeThrow ? rt.describeThrow(e) : "";
+      err = runtimeError(rt.line, `처리하지 않은 예외 때문에 프로그램이 멈췄어요${what ? `: ${what}` : ""}`,
+        "throw 한 예외를 아무도 받지 않았어요. try { … } catch (const exception &e) { … } 로 받아 주세요.");
+    } else if (e instanceof RangeError && /call stack/i.test(e.message)) {
       err = runtimeError(rt.line, "함수가 자기 자신을 너무 깊이 불렀어요", "재귀 함수에 멈추는 조건이 있는지 확인해 보세요.");
     } else if (!(e instanceof CError)) {
       err = runtimeError(rt.line, "실행기 내부 오류가 났어요", `C 실행기가 아직 처리하지 못하는 코드예요. (${e && e.message})`);

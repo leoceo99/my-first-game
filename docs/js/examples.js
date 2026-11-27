@@ -575,4 +575,64 @@ int main() {
 }
 `,
   },
+  {
+    lang: "cpp",
+    name: "C++ 동물 농장",
+    about: "상속, virtual, override, try/catch 예외",
+    code: `#include <iostream>
+#include <string>
+#include <vector>
+#include <stdexcept>
+using namespace std;
+
+// 부모 클래스: 모든 동물이 가진 것
+class Animal {
+protected:
+    string name;
+public:
+    Animal(string n) : name(n) {}
+    virtual ~Animal() {}
+    virtual string sound() const = 0;   // 자식 클래스가 꼭 만들어야 해요
+    void speak() const { cout << name << ": " << sound() << endl; }
+};
+
+// 자식 클래스들: 소리만 다르게 만들어요
+class Dog : public Animal {
+public:
+    Dog(string n) : Animal(n) {}
+    string sound() const override { return "멍멍"; }
+};
+
+class Cat : public Animal {
+public:
+    Cat(string n) : Animal(n) {}
+    string sound() const override { return "야옹"; }
+};
+
+Animal *makeAnimal(const string &kind, const string &name) {
+    if (kind == "개") return new Dog(name);
+    if (kind == "고양이") return new Cat(name);
+    throw invalid_argument("모르는 동물이에요: " + kind);
+}
+
+int main() {
+    vector<Animal*> farm;
+    cout << "'개 바둑이' 처럼 종류와 이름을 입력하고, 다 쓰면 [입력 끝]을 누르세요." << endl;
+
+    string kind, name;
+    while (cin >> kind >> name) {
+        try {
+            farm.push_back(makeAnimal(kind, name));
+        } catch (const exception &e) {
+            cout << "앗! " << e.what() << endl;
+        }
+    }
+
+    cout << "--- 농장의 동물들 ---" << endl;
+    for (Animal *a : farm) a->speak();   // 실제 동물의 sound()가 불려요
+    for (Animal *a : farm) delete a;
+    return 0;
+}
+`,
+  },
 ];

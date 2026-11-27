@@ -70,12 +70,12 @@ test("C++ 모드: void*를 그냥 넣으면 C++ 규칙대로 알려요", () => {
   ok("#include <cstdlib>\n#include <cstdio>\nint main() { int *p = (int *)malloc(sizeof(int)); *p = 3; printf(\"%d\", *p); free(p); }", "3");
 });
 
-test("C++ 모드: 아직 없는 기능은 단계와 함께 안내해요", () => {
+test("C++ 모드: 아직 없는 기능은 친절하게 안내해요", () => {
   const cases = [
     ["#include <sstream>\nint main() {}", /<sstream>.*다음 단계/],
-    ["struct A { virtual void f() {} };\nint main() {}", /'virtual'.*6단계/],
+    ["struct A { virtual void f() {} };\nstruct B : A {};\nint main() { A *a = new B; B *b = dynamic_cast<B*>(a); }", /'dynamic_cast'.*지원하지 않아요/],
     ["#include <iostream>\nint main() { std::tuple<int, int> t; }", /std::tuple/],
-    ["int main() { try { } catch (int e) { } }", /'try'.*6단계/],
+    ["int main() { auto f = [](auto x) { return x; }; }", /auto는 아직/],
   ];
   for (const [code, pattern] of cases) {
     const r = run(code);
@@ -415,20 +415,43 @@ for (const [name, code, want, inputs] of STAGE5B) {
   });
 }
 
-// ---------- 앞으로의 단계: 목표 프로그램 ----------
-const TODO = [
-  [6, "상속, 가상 함수, 예외", `#include <iostream>
-#include <stdexcept>
-struct Shape { virtual double area() const = 0; virtual ~Shape() {} };
-struct Sq : Shape { double s; Sq(double s) : s(s) {} double area() const override { return s * s; } };
-int main() {
-    Shape *p = new Sq(3);
-    std::cout << p->area() << "\\n";
-    delete p;
-    try { throw std::runtime_error("앗"); } catch (const std::exception &e) { std::cout << e.what() << "\\n"; }
-}`, "9\n앗\n"],
-];
 
-for (const [stage, name, code, want, inputs] of TODO) {
-  test(`C++ ${stage}단계 목표: ${name}`, { todo: `C++ ${stage}단계에서 만들 예정` }, () => ok(code, want, inputs));
+// ---------- 6단계: 상속, 가상 함수, 예외 ----------
+const H6 = "#include <iostream>\n#include <string>\n#include <vector>\n#include <stdexcept>\nusing namespace std;\n";
+const ANIMALS = "class Animal {\nprotected:\n  string name;\npublic:\n  Animal(string n) : name(n) {}\n  virtual ~Animal() {}\n  virtual string sound() const { return \"...\"; }\n  void speak() const { cout << name << \": \" << sound() << endl; }\n};\nclass Dog : public Animal {\npublic:\n  Dog(string n) : Animal(n) {}\n  string sound() const override { return \"멍멍\"; }\n};\nclass Cat : public Animal {\npublic:\n  Cat(string n) : Animal(n) {}\n  string sound() const override { return \"야옹\"; }\n};\n";
+const STAGE6 = [
+  ["상속과 부모 멤버", H6 + "class Base { public: int x = 1; int twice() const { return x * 2; } };\nclass Child : public Base { public: int y = 5; };\nint main() { Child c; c.x = 3; cout << c.x << c.y << c.twice() << endl; }", "356\n"],
+  ["가상 함수", H6 + ANIMALS + "int main() { Dog d(\"바둑이\"); Cat c(\"나비\"); d.speak(); c.speak(); }", "바둑이: 멍멍\n나비: 야옹\n"],
+  ["부모 포인터 vector", H6 + ANIMALS + "int main() { vector<Animal*> zoo = {new Dog(\"a\"), new Cat(\"b\"), new Animal(\"c\")}; for (Animal *a : zoo) cout << a->sound(); for (Animal *a : zoo) delete a; cout << endl; }", "멍멍야옹...\n"],
+  ["부모 참조", H6 + ANIMALS + "void hear(const Animal &a) { cout << a.sound() << endl; }\nint main() { Dog d(\"x\"); hear(d); Animal &r = d; cout << r.sound() << endl; }", "멍멍\n멍멍\n"],
+  ["값으로 자르기(slicing)", H6 + ANIMALS + "int main() { Dog d(\"x\"); Animal a = d; cout << a.sound() << endl; }", "...\n"],
+  ["생성자·소멸자 순서", H6 + "struct A { A() { cout << \"A \"; } virtual ~A() { cout << \"~A \"; } };\nstruct B : A { B() { cout << \"B \"; } ~B() { cout << \"~B \"; } };\nint main() { { B b; } cout << \"| \"; A *p = new B(); delete p; cout << endl; }", "A B ~B ~A | A B ~B ~A \n"],
+  ["부모 생성자에 값 넘기기", H6 + "class P { protected: int v; public: P(int x) : v(x) {} };\nclass Q : public P { int w; public: Q(int a, int b) : P(a), w(b) {} int sum() const { return v + w; } };\nint main() { Q q(2, 3); cout << q.sum() << endl; }", "5\n"],
+  ["순수 가상 함수와 추상 클래스", H6 + "struct Shape { virtual double area() const = 0; virtual ~Shape() {} };\nstruct Rect : Shape { double w, h; Rect(double a, double b) : w(a), h(b) {} double area() const override { return w * h; } };\nstruct Circle : Shape { double r; Circle(double x) : r(x) {} double area() const override { return 3 * r * r; } };\nint main() { vector<Shape*> s = {new Rect(2, 3), new Circle(1)}; double t = 0; for (auto p : s) t += p->area(); cout << t << endl; for (auto p : s) delete p; }", "9\n"],
+  ["추상 클래스로 객체", H6 + "struct Shape { virtual double area() const = 0; };\nint main() { Shape s; }", "ERR"],
+  ["override 틀림", H6 + "struct A { virtual void f(int) {} };\nstruct B : A { void f(double) override {} };\nint main() {}", "ERR"],
+  ["부모 함수 직접 부르기", H6 + "struct A { virtual string hi() const { return \"A\"; } };\nstruct B : A { string hi() const override { return A::hi() + \"B\"; } };\nint main() { B b; A *p = &b; cout << p->hi() << endl; }", "AB\n"],
+  ["private 부모 멤버", H6 + "class A { int secret = 1; };\nclass B : public A { public: int get() { return secret; } };\nint main() { B b; cout << b.get(); }", "ERR"],
+  ["protected는 자식에서", H6 + "class A { protected: int v = 7; };\nclass B : public A { public: int get() { return v; } };\nint main() { B b; cout << b.get() << endl; }", "7\n"],
+  ["protected 밖에서 오류", H6 + "class A { protected: int v = 7; };\nint main() { A a; cout << a.v; }", "ERR"],
+  ["3대 상속", H6 + "struct A { virtual int id() const { return 1; } };\nstruct B : A { int id() const override { return 2; } };\nstruct C : B { int id() const override { return 3; } };\nint main() { C c; A &a = c; B &b = c; cout << a.id() << b.id() << endl; }", "33\n"],
+  ["try/catch 기본", H6 + "int main() { try { throw runtime_error(\"앗\"); cout << \"안 나옴\"; } catch (const exception &e) { cout << \"잡음: \" << e.what() << endl; } cout << \"계속\" << endl; }", "잡음: 앗\n계속\n"],
+  ["catch 순서와 종류", H6 + "void f(int k) { if (k == 1) throw 42; if (k == 2) throw string(\"글자\"); if (k == 3) throw out_of_range(\"범위\"); }\nint main() { for (int k = 1; k <= 3; k++) { try { f(k); } catch (int e) { cout << \"int \" << e << endl; } catch (const string &s) { cout << \"string \" << s << endl; } catch (const logic_error &e) { cout << \"logic \" << e.what() << endl; } } }", "int 42\nstring 글자\nlogic 범위\n"],
+  ["catch (...)와 다시 던지기", H6 + "int main() { try { try { throw 1.5; } catch (...) { cout << \"안쪽 \"; throw; } } catch (double d) { cout << \"바깥 \" << d << endl; } }", "안쪽 바깥 1.5\n"],
+  ["함수 밖으로 던지고 소멸자", H6 + "struct R { string n; R(string x) : n(x) {} ~R() { cout << \"~\" << n << \" \"; } };\nvoid g() { R r(\"g\"); throw 1; }\nint main() { try { R a(\"a\"); g(); } catch (int) { cout << \"잡음\" << endl; } }", "~g ~a 잡음\n"],
+  ["받지 않은 예외", H6 + "int main() { throw runtime_error(\"큰일\"); }", "ERR"],
+  ["vector.at 예외", H6 + "int main() { vector<int> v(3); try { v.at(5) = 1; } catch (const out_of_range &e) { cout << \"범위 밖\" << endl; } }", "범위 밖\n"],
+  ["stoi 예외", H6 + "int main() { try { int x = stoi(\"abc\"); cout << x; } catch (const invalid_argument &e) { cout << \"숫자 아님 \" << e.what() << endl; } }", "숫자 아님 stoi\n"],
+  ["직접 만든 예외 클래스", H6 + "class MyError : public runtime_error { public: int code; MyError(int c) : runtime_error(\"내 오류\"), code(c) {} };\nint main() { try { throw MyError(7); } catch (const MyError &e) { cout << e.what() << e.code << endl; } }", "내 오류7\n"],
+  ["예외 + 입력", H6 + "int main() { int a, b; cin >> a >> b; try { if (b == 0) throw runtime_error(\"0으로 나눌 수 없어요\"); cout << a / b << endl; } catch (const exception &e) { cout << e.what() << endl; } }", "0으로 나눌 수 없어요\n", ["5 0"]],
+  ["static_cast 아래로", H6 + ANIMALS + "int main() { Animal *a = new Dog(\"d\"); Dog *d = static_cast<Dog*>(a); cout << d->sound() << endl; delete a; }", "멍멍\n"],
+  ["부모 주소를 자식에 그냥", H6 + ANIMALS + "int main() { Animal *a = new Dog(\"d\"); Dog *d = a; }", "ERR"],
+  ["6단계 목표", "#include <iostream>\n#include <stdexcept>\nstruct Shape { virtual double area() const = 0; virtual ~Shape() {} };\nstruct Sq : Shape { double s; Sq(double s) : s(s) {} double area() const override { return s * s; } };\nint main() {\n    Shape *p = new Sq(3);\n    std::cout << p->area() << \"\\n\";\n    delete p;\n    try { throw std::runtime_error(\"앗\"); } catch (const std::exception &e) { std::cout << e.what() << \"\\n\"; }\n}", "9\n앗\n"],
+];
+for (const [name, code, want, inputs] of STAGE6) {
+  test(`C++ 6단계: ${name}`, () => {
+    const r = run(code, inputs);
+    if (want === "ERR") assert.equal(r.status, "error", r.out);
+    else ok(code, want, inputs);
+  });
 }
